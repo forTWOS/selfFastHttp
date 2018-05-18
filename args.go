@@ -1,6 +1,7 @@
 package selfFastHttp
 
 import (
+	"bytes"
 	"io"
 	"sync"
 )
@@ -292,21 +293,6 @@ func (s *argsScanner) next(kv *argsKV) bool {
 }
 
 // =============================
-// args添加1栏位
-func allocArg(h []argsKV) ([]argsKV, *argsKV) {
-	n := len(h)
-	if cap(h) > n {
-		h = h[:n+1]
-	} else {
-		h = append(h, argsKV{})
-	}
-	return h, &h[n]
-}
-
-// args移除1栏位
-func releaseArg(h []argsKV) []argsKV {
-	return h[:len(h)-1] //引用操作
-}
 
 func visitArgs(args []argsKV, f func(k, v []byte)) {
 	for i, n := 0, len(args); i < n; i++ {
@@ -358,4 +344,144 @@ func delAllArgs(args []argsKV, key string) []argsKV {
 		}
 	}
 	return args
+}
+
+func setArgBytes(h []argsKV, key, value []byte) []argsKV {
+	return setArg(h, b2s(key), b2s(value))
+}
+
+// 先尝试找到1个，并赋值
+// 找不到，就添加1个
+func setArg(h []argsKV, key, value string) []argsKV {
+	for i, n := 0, len(h); i < n; i++ {
+		kv := &h[i]
+		if key == string(kv.key) {
+			kv.value = append(kv.value[:0], value...)
+			return h
+		}
+	}
+	return appendArg(h, key, value)
+}
+
+func appendArgBytes(h []argsKV, key, value []byte) []argsKV {
+	return appendArg(h, b2s(key), b2s(value))
+}
+
+// 先分配1个栏位，再复制key,value值
+func appendArg(args []argsKV, key, value string) []argsKV {
+	var kv *argsKV
+	args, kv = allocArg(args)
+	kv.key = append(kv.key[:0], key...)
+	kv.value = append(kv.value[:0], value...)
+	return args
+}
+
+// args添加1栏位
+func allocArg(h []argsKV) ([]argsKV, *argsKV) {
+	n := len(h)
+	if cap(h) > n {
+		h = h[:n+1]
+	} else {
+		h = append(h, argsKV{})
+	}
+	return h, &h[n]
+}
+
+// args移除1栏位
+func releaseArg(h []argsKV) []argsKV {
+	return h[:len(h)-1] //引用操作
+}
+
+// 检测是否存在
+func hasArg(h []argsKV, key string) bool {
+	for i, n := 0, len(h); i < n; i++ {
+		kv := &h[i]
+		if key == string(kv.key) {
+			return true
+		}
+	}
+	return false
+}
+
+// *直接返回引用
+func peekArgBytes(h []argsKV, k []byte) []byte {
+	for i, n := 0, len(h); i < n; i++ {
+		kv := &h[i]
+		if bytes.Equal(kv.key, k) {
+			return kv.value
+		}
+	}
+	return nil
+}
+
+// *直接返回引用
+// todo 使用peekArgBytes or this
+func peekArgStr(h []argsKV, k string) []byte {
+	k_tmp := s2b(k)
+	for i, n := 0, len(h); i < n; i++ {
+		kv := &h[i]
+		if string(kv.key) == k {
+			return kv.value
+		}
+	}
+	return nil
+}
+
+// 将src解码，并赋到dst后
+func decodeArgAppend(dst, src []byte) []byte {
+	if bytes.IndexByte(src, '%') < 0 && bytes.IndexByte(src, '+') < 0 {
+		// src不包含转码字符
+		return append(dst, src...)
+	}
+
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if c == '%' {
+			if i+2 >= len(src) { // 结尾
+				return append(dst, src[i:]...)
+			}
+			x2 := hex2intTable[src[i+2]]
+			x1 := hex2intTable[src[i+1]]
+			if x1 == 16 || x2 == 16 {
+				dst = append(dst, '%')
+			} else {
+				dst = append(dst, x1<<4|x2)
+				i += 2
+			}
+		} else if c == '+' {
+			dst = append(dst, ' ')
+		} else {
+			dst = append(dst, c)
+		}
+	}
+	return dst
+}
+
+// 与decodeArgAppend保持一致，除了不解码'+'
+// 仅因为性能原因，这个函数从decodeArgAppend复制过来??
+func decodeArgAppendNoPlus(dst, src []byte) []byte {
+	if bytes.IndexByte(src, '%') < 0 {
+		// src不包含转码字符
+		return append(dst, src...)
+	}
+
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if c == '%' {
+			if i+2 >= len(src) { // 结尾
+				return append(dst, src[i:]...)
+			}
+			x2 := hex2intTable[src[i+2]]
+			x1 := hex2intTable[src[i+1]]
+			if x1 == 16 || x2 == 16 {
+				dst = append(dst, '%')
+			} else {
+				dst = append(dst, x1<<4|x2)
+				i += 2
+			}
+		} else {
+			dst = append(dst, c)
+		}
+	}
+	return dst
 }

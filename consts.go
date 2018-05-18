@@ -9,7 +9,8 @@ import (
 var (
 	errHijacked       = errors.New("connection has been hijacked")
 	defaultServerName = []byte("selfFastHttp")
-	ErrNoArgValue     = errors.New("no Arg value for the given key")
+
+	ErrNoArgValue = errors.New("no Arg value for the given key")
 )
 
 const (
