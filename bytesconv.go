@@ -1,9 +1,37 @@
 package selfFastHttp
 
 import (
+	"errors"
+	"math"
 	"reflect"
 	"unsafe"
 )
+
+// 将int转成[]byte
+// 循环判断传入值:
+//    1.>=10 将个位数转成ascii码，存入临时缓存buf中
+//    2.最后一位，也保存进缓存buf中
+// 将缓存附加到dst后
+func AppendUint(dst []byte, n int) []byte {
+	if n < 0 {
+		panic("BUG: int must be positive")
+	}
+
+	var b [20]byte
+	buf := b[:]
+	i := len(buf)
+	var q int
+	for n >= 10 {
+		i--
+		q = n / 10
+		buf[i] = '0' + byte(n-q*10)
+		n = q
+	}
+	i--
+	buf[i] = '0' + byte(n)
+	dst = append(dst, buf[i:]...)
+	return dst
+}
 
 func ParseUint(buf []byte) (int, error) {
 	v, n, err := parseUintBuf(buf)
@@ -21,6 +49,10 @@ var (
 )
 
 // 解析[]byte成int
+// 1.长度判断
+// 2.将字符ascii值转对应0-9数值(c - '0')
+// 3.字符非法判定 k > 9 (byte=uint8，负号变正数)
+// 4.数值最长字串判定
 func parseUintBuf(b []byte) (int, int, error) {
 	n := len(b)
 	if n == 0 {
@@ -30,7 +62,7 @@ func parseUintBuf(b []byte) (int, int, error) {
 	for i := 0; i < n; i++ {
 		c := b[i]
 		k := c - '0'
-		if k > 9 { //非法字符
+		if 0 < k || k > 9 { //非法字符
 			if i == 0 {
 				return -1, i, errUnexpectedFirstChar
 			}
@@ -50,9 +82,18 @@ var (
 	errUnexpectedFloatEnd   = errors.New("unexpected end of float number")
 	errInvalidFloatExponent = errors.New("invalid float number exponent")
 	errUnexpectedFloatChar  = errors.New("unexpected char found in float number")
+	errTooLongFloat64       = errors.New("too long char in float number")
 )
 
-func ParseUfloat(buf []byte) float64 {
+// 将[]byte转为float64，粗略版
+// 1.空值判断
+// 2.遍历：
+//   2.1.0-9, 按10进制转成float64
+//   2.2.非0-9：
+//      2.2.1. 若为'.'，若重复出现，返回错误;否则加标志-后续小数值控制
+//      2.2.2. 若为'e'，'E'，判断若无后续字符,报错;否则，后续字串转10进制，用于前面值指数运算
+// 粗略定为最长19，超过即为不支持的数据
+func ParseUfloat(buf []byte) (float64, error) {
 	if len(buf) == 0 {
 		return -1, errEmptyFloat
 	}
@@ -60,13 +101,50 @@ func ParseUfloat(buf []byte) float64 {
 	var v uint64
 	var offset = 1.0
 	var pointFound bool
-	for i, c:= range b {
+
+	for i, c := range b {
+		if i > 19 {
+			return -1, errTooLongFloat64
+		}
 		if c < '0' || c > '9' {
 			if c == '.' {
-				if 
+				if pointFound {
+					return -1, errDuplicateFloatPoint
+				}
+				pointFound = true
+				continue
 			}
+			if c == 'e' || c == 'E' {
+				if i+1 > len(b) {
+					return -1, errUnexpectedFloatEnd
+				}
+				b = b[i+1:]
+				minus := -1 //正负号
+				switch b[0] {
+				case '+':
+					b = b[1:]
+					minus = 1
+				case '-':
+					b = b[1:]
+				default:
+					minus = 1
+				}
+				vv, err := ParseUint(b)
+				if err != nil {
+					return -1, errInvalidFloatExponent
+				}
+				return float64(v) / offset * math.Pow10(minus*int(vv)), nil
+
+			}
+			return -1, errUnexpectedFloatChar
+		}
+		v = v*10 + uint64(c-'0')
+		if pointFound {
+			offset *= 10 // 1.0/10000会转1e-05
 		}
 	}
+	// offset转成科学计数后，与值做运算，会不精确 123 * 1e-05 = 0.0012300000000000002
+	return float64(v) / offset, nil //精确性-0.00123 == 0.0012300000000000002
 }
 
 // 将字符的十六进制转为十进制,其它字符保留原值

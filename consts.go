@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	errHijacked       = errors.New("connection has been hijacked")
-	defaultServerName = []byte("selfFastHttp")
+	errHijacked        = errors.New("connection has been hijacked")
+	defaultServerName  = []byte("selfFastHttp")
+	defaultContentType = []byte("text/plain; charset=utf-8")
 
 	ErrNoArgValue = errors.New("no Arg value for the given key")
 )

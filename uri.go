@@ -34,7 +34,7 @@ type URI struct {
 	scheme       []byte // 请求协议 http://
 	path         []byte // 整理后的path
 	queryString  []byte // ?之后的字串
-	hash         []byte // 片段,url中的#之后字串
+	fragment     []byte // 片段,url中的#之后字串
 	host         []byte // 主机地址
 
 	queryArgs       Args // 整理后的query
@@ -44,4 +44,47 @@ type URI struct {
 	requestURI []byte // 请求url 由RequestURI()在调用时生成
 
 	h *RequestHeader
+}
+
+func (u *URI) Reset() {
+	u.pathOriginal = u.pathOriginal[:0]
+	u.scheme = u.scheme[:0]
+	u.path = u.path[:0]
+	u.queryString = u.queryString[:0]
+	u.fragment = u.fragment[:0]
+	u.host = u.host[:0]
+	u.queryArgs.Reset()
+	u.parsedQueryArgs = false
+
+	//	u.fullURI = u.fullURI[:0]
+	//	u.requestURI = u.requestURI[:0]
+
+	u.h = nil
+}
+func (u *URI) CopyTo(dst *URI) {
+	dst.Reset()
+
+	dst.pathOriginal = append(dst.pathOriginal[:0], u.pathOriginal...)
+	dst.scheme = append(dst.scheme[:0], u.scheme...)
+	dst.path = append(dst.path[:0], u.path...)
+	dst.queryString = append(dst.queryString[:0], u.queryString...)
+	dst.fragment = append(dst.fragment[:0], u.fragment...)
+	dst.host = append(dst.host[:0], u.host...)
+
+	u.queryArgs.CopyTo(dst.queryArgs)
+	dst.parsedQueryArgs = u.parsedQueryArgs
+
+	//	dst.fullURI = append(dst.fullURI[:0], u.fullURI...)
+	//	dst.requestURI = append(dst.requestURI[:0], u.requestURI...)
+
+	if u.h != nil {
+		if dst.h == nil {
+			dst.h = &RequestHeader{}
+		}
+		u.h.CopyTo(dst.h)
+	} else {
+		if dst.h != nil {
+			dst.h.Reset()
+		}
+	}
 }
