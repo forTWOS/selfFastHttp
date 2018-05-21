@@ -98,9 +98,9 @@ func (a *Args) QueryString() []byte {
 	return a.buf
 }
 
-// buf 重组
+// 将args键值，遍历传给dst
 func (a *Args) AppendBytes(dst []byte) []byte {
-	for i, n := 0, len(dst); i < n; i++ {
+	for i, n := 0, len(a.args); i < n; i++ {
 		kv := &a.args[i]
 		dst = AppendQuotedArg(dst, kv.key)
 		if len(kv.value) > 0 {

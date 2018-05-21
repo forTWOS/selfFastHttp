@@ -228,3 +228,11 @@ func (ctx *RequestCtx) Redirect(uri string, statusCode int) {
 	ctx.redirect(u.FullURI(), statusCode)
 	ReleaseURI(u)
 }
+
+func (ctx *RequestCtx) RedirectBytes(uri []byte, statusCode int) {
+	s := b2s(uri)
+	ctx.Redirect(s, statusCode)
+}
+func (ctx *RequestCtx) redirect(url []byte, statusCode int) {
+	ctx.Response.Header.SetCanonical(strLocation, uri)
+}

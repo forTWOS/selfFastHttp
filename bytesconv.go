@@ -164,6 +164,42 @@ var hex2intTable = func() []byte {
 	return b
 }()
 
+// -------------------
+const toLower = 'a' - 'A'
+
+// 256字符中 A-Z转成a-z
+var toLowerTable = func() [256]byte {
+	var a [256]byte
+	for i := 0; i < 256; i++ {
+		c := byte(i)
+		if c >= 'A' && c <= 'Z' {
+			c += toLower
+		}
+		a[i] = c
+	}
+	return a
+}()
+
+// 256字符中 a-z转成A-Z
+var toUpperTable = func() [256]byte {
+	var a [256]byte
+	for i := 0; i < 256; i++ {
+		c := byte(i)
+		if c >= 'a' && c <= 'z' {
+			c -= toLower
+		}
+		a[i] = c
+	}
+	return a
+}()
+
+func lowercaseBytes(b []byte) {
+	for i, n := 0, len(b); i < n; i++ {
+		p := &b[i]
+		*p = toLowerTable[*p]
+	}
+}
+
 // 用指针的方式，将[]byte转为string,绕过内存复制
 // 失败:在将来版本中 string 和 slice 其中一个改变
 func b2s(b []byte) string {
@@ -187,7 +223,7 @@ func hexCharUpper(c byte) byte {
 	return c - 10 + 'A'
 }
 
-// 将经过url-encoded转换的src传给dst
+// 将src经url-encoded转换,传给dst
 func AppendQuotedArg(dst, src []byte) []byte {
 	for _, c := range src {
 		// US-ASCII 2 UTF-8
@@ -195,6 +231,19 @@ func AppendQuotedArg(dst, src []byte) []byte {
 		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
 			c == '*' || c == '-' || c == '.' || c == '_' {
 			//数字、字母、*、-、.、_
+			dst = append(dst, c)
+		} else {
+			dst = append(dst, '%', hexCharUpper(c>>4), hexCharUpper(c&15))
+		}
+	}
+	return dst
+}
+
+// 按路径格式，将传入src转码到dst
+func appendQuotedPath(dst, src []byte) []byte {
+	for _, c := range src {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '/' || c == '.' || c == ',' || c == '=' || c == ':' || c == '&' || c == '~' || c == '-' || c == '_' {
 			dst = append(dst, c)
 		} else {
 			dst = append(dst, '%', hexCharUpper(c>>4), hexCharUpper(c&15))

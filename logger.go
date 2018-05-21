@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"time"
 )
 
 type Logger interface {
@@ -21,7 +22,7 @@ type selfLogger struct {
 
 func (l *selfLogger) Printf(format string, args ...interface{}) {
 	var buf bytes.Buffer
-	now := CoarseTimeNow()
+	now := time.Now().Truncate(time.Second) // CoarseTimeNow()
 	buf.WriteString(now.String())
 	buf.WriteString(" : ")
 	str := fmt.Sprintf(format, args...)

@@ -7,6 +7,23 @@ import (
 )
 
 var (
+	strSlash            = []byte("/")
+	strSlashSlash       = []byte("//")
+	strSlashDotDot      = []byte("/..")
+	strSlashDotSlash    = []byte("/./")
+	strSlashDotDotSlash = []byte("/../")
+	strCRLF             = []byte("\r\n")
+	strHTTP             = []byte("http")
+	strHTTPS            = []byte("https")
+	strHTTP11           = []byte("HTTP/1.1")
+	strColonSlashSlash  = []byte("://")
+	strColonSpace       = []byte(": ")
+	strGMT              = []byte("GMT")
+
+	strLocation = []byte("Location")
+)
+
+var (
 	errHijacked        = errors.New("connection has been hijacked")
 	defaultServerName  = []byte("selfFastHttp")
 	defaultContentType = []byte("text/plain; charset=utf-8")
