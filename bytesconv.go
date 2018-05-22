@@ -4,8 +4,16 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"time"
 	"unsafe"
 )
+
+// HTTP-compliant (RFC1123) representation of date
+func AppendHTTPDate(dst []byte, date time.Time) []byte {
+	dst = date.In(timt.UTC).AppendFormat(dst, time.RFC1123)
+	copy(dst[len(dst)-3:], strGMT)
+	return dst
+}
 
 // 将int转成[]byte
 // 循环判断传入值:

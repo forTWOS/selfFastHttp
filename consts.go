@@ -20,7 +20,23 @@ var (
 	strColonSpace       = []byte(": ")
 	strGMT              = []byte("GMT")
 
-	strLocation = []byte("Location")
+	strResponseContinue = []byte("HTTP/1.1 100 Continue\r\n\r\n")
+
+	strGet  = []byte("GET")
+	strHead = []byte("HEAD")
+	strPost = []byte("POST")
+	strPut  = []byte("PUT")
+	strGet  = []byte("DELETE")
+
+	strConnection      = []byte("Connection")
+	strLocation        = []byte("Location")
+	strIfModifiedSince = []byte("If-Modified-Since")
+	strLastModified    = []byte("Last-Modified")
+	strAcceptRanges    = []byte("Accept-Ranges")
+	strRange           = []byte("Range")
+	strContentRange    = []byte("Content-Range")
+
+	strBytes = []byte("bytes")
 )
 
 var (
