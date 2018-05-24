@@ -9,13 +9,14 @@ import (
 )
 
 // HTTP-compliant (RFC1123) representation of date
+// windows amd64 BenchmarkAppendHTTPDate-8    	20000000	       101 ns/op
 func AppendHTTPDate(dst []byte, date time.Time) []byte {
-	dst = date.In(timt.UTC).AppendFormat(dst, time.RFC1123)
+	dst = date.In(time.UTC).AppendFormat(dst, time.RFC1123)
 	copy(dst[len(dst)-3:], strGMT)
 	return dst
 }
 
-// 将int转成[]byte
+// 将int转成[]byte-int:最大20位
 // 循环判断传入值:
 //    1.>=10 将个位数转成ascii码，存入临时缓存buf中
 //    2.最后一位，也保存进缓存buf中
@@ -31,11 +32,17 @@ func AppendUint(dst []byte, n int) []byte {
 	var q int
 	for n >= 10 {
 		i--
+		if i < 0 {
+			panic("BUG: int length bigger than 20")
+		}
 		q = n / 10
 		buf[i] = '0' + byte(n-q*10)
 		n = q
 	}
 	i--
+	if i < 0 {
+		panic("BUG: int length bigger than 20")
+	}
 	buf[i] = '0' + byte(n)
 	dst = append(dst, buf[i:]...)
 	return dst

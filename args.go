@@ -331,7 +331,7 @@ func delAllArgsBytes(args []argsKV, key []byte) []argsKV {
 // del操作 所有重复key的
 // 1.找到
 // 2.前移
-// 3.将删除的值，移到末尾(不可见),而非直接删除
+// 3.将删除的值，移到末尾(不可见),而非直接删除 todo?
 func delAllArgs(args []argsKV, key string) []argsKV {
 	for i, n := 0, len(args); i < n; i++ {
 		kv := &args[i]

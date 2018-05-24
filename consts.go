@@ -7,6 +7,12 @@ import (
 )
 
 var (
+	defaultServerName  = []byte("selfFastHttp")
+	defaultUserAgent   = []byte("selfFastHttp")
+	defaultContentType = []byte("text/plain; charset=utf-8")
+)
+
+var (
 	strSlash            = []byte("/")
 	strSlashSlash       = []byte("//")
 	strSlashDotDot      = []byte("/..")
@@ -22,27 +28,61 @@ var (
 
 	strResponseContinue = []byte("HTTP/1.1 100 Continue\r\n\r\n")
 
-	strGet  = []byte("GET")
-	strHead = []byte("HEAD")
-	strPost = []byte("POST")
-	strPut  = []byte("PUT")
-	strGet  = []byte("DELETE")
+	strGet    = []byte("GET")
+	strHead   = []byte("HEAD")
+	strPost   = []byte("POST")
+	strPut    = []byte("PUT")
+	strDelete = []byte("DELETE")
 
-	strConnection      = []byte("Connection")
-	strLocation        = []byte("Location")
-	strIfModifiedSince = []byte("If-Modified-Since")
-	strLastModified    = []byte("Last-Modified")
-	strAcceptRanges    = []byte("Accept-Ranges")
-	strRange           = []byte("Range")
-	strContentRange    = []byte("Content-Range")
+	// i.e. 'xx: gzip'
+	strExpect           = []byte("Expect") // 'Expect: 100-continue'，遇到不支持HTTP/1.1的代理或服务器，会返回417错误
+	strConnection       = []byte("Connection")
+	strContentLength    = []byte("Content-Length")
+	strContentType      = []byte("Content-Type")
+	strDate             = []byte("Date")
+	strHost             = []byte("Host")
+	strReferer          = []byte("Referer") // 上一页url
+	strServer           = []byte("Server")
+	strTransferEncoding = []byte("Transfer-Encoding") // 机制：不依赖头部的长度信息，也能知道实体的边界——分块编码（Transfer-Encoding: chunked）
+	strContentEncoding  = []byte("Content-Encoding")
+	strAcceptEncoding   = []byte("Accept-Encoding")
+	strUserAgent        = []byte("User-Agent")
+	strCookie           = []byte("Cookie")     // 客户端请求头
+	strSetCookie        = []byte("Set-Cookie") //服务端响应头
+	strLocation         = []byte("Location")
+	strIfModifiedSince  = []byte("If-Modified-Since")
+	strLastModified     = []byte("Last-Modified")
+	strAcceptRanges     = []byte("Accept-Ranges")
+	strRange            = []byte("Range")
+	strContentRange     = []byte("Content-Range")
 
-	strBytes = []byte("bytes")
+	// Cookie
+	strCookieExpires  = []byte("expires")
+	strCookieDomain   = []byte("domain")
+	strCookiePath     = []byte("path")
+	strCookieHTTPOnly = []byte("HttpOnly") // 使cookie在浏览器中不可见-js、applet不可获得,防xss攻击
+	strCookieSecure   = []byte("secure")   // 仅在https下传输
+
+	// 'Connection: xx'
+	strClose               = []byte("close")
+	strGzip                = []byte("gzip")
+	strDeflate             = []byte("deflate") //压缩
+	strKeepAlive           = []byte("keep-alive")
+	strKeepAliveCamelCase  = []byte("Keep-Alive")
+	strUpgrade             = []byte("Upgrade")
+	strChunked             = []byte("chunked")  // 'Transfer-Encoding: chunked'
+	strIdentity            = []byte("identity") //HTTP/1.1弃用 'Transfer-Encoding: identity'
+	str100Continue         = []byte("100-continue")
+	strPostArgsContentType = []byte("application/x-www-form-urlencoded")
+	strMultipartFormData   = []byte("multipart/form-data")
+	strBoundary            = []byte("boundary") // multipart/form-data的分隔符
+	strBytes               = []byte("bytes")
+	strTextSlash           = []byte("text/")
+	strApplicationSlash    = []byte("application/")
 )
 
 var (
-	errHijacked        = errors.New("connection has been hijacked")
-	defaultServerName  = []byte("selfFastHttp")
-	defaultContentType = []byte("text/plain; charset=utf-8")
+	errHijacked = errors.New("connection has been hijacked")
 
 	ErrNoArgValue = errors.New("no Arg value for the given key")
 )

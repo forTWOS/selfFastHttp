@@ -64,3 +64,24 @@ type Response struct {
 func (*Response) Reset() {
 
 }
+
+// =========================
+// --- requestBodyWriter
+type requestBodyWriter struct {
+	r *Request
+}
+
+func (w *requestBodyWriter) Write(p []byte) (int, error) {
+	w.r.AppendBody(p)
+	return len(p), nil
+}
+
+// --- responseBodyWriter
+type responseBodyWriter struct {
+	r *Response
+}
+
+func (w *responseBodyWriter) Write(p []byte) (int, error) {
+	w.r.AppendBody(p)
+	return len(p), nil
+}
