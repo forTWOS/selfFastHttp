@@ -12,7 +12,29 @@ import (
 
 // 禁止直接复制值,正确做法:新建并CopyTo
 // 不可用于并发
-// -- 接口：Add(Byte[K][V]),Set(Byte[K][V]),Del(Bytes),VisitAll,Write(To),CopyTo,Peek(Bytes),Read,Reset,String,Header
+type ResponseHeader struct {
+	noCopy noCopy
+
+	disableNormalizing bool // 禁止格式化头部各字段名;默认启用-首字母大小
+	noHTTP11           bool // 请求是否是 HTTP/1.1
+	connectionClose    bool // 是否已设'Connection: close'响应头
+
+	statusCode         int    // 响应状态码
+	contentLength      int    // 用于响应头: 'Range: bytes=startPos-endPos/contentLength'
+	contentLengthBytes []byte // contentLength的字节化
+
+	contentType []byte // 网页编码:text/plain; charset=utf-8
+	server      []byte // 'Server: Microsoft-IIS/6.0' 'Server: nginx'
+
+	h     []argsKV // 头部数据-键值对
+	bufKV argsKV   // 内部[]byte工具,减少临时变量使用
+
+	cookies []argsKV // 与cookiesCollected合用 i.e.'Set-Cookie: __cfduid=dbab338f0f87894a976; expires=Thu, 23-May-19 03:06:16 GMT; path=/; domain=.cyberciti.org; HttpOnly'
+}
+
+// 禁止直接复制值,正确做法:新建并CopyTo
+// 不可用于并发
+// -- 接口：Add(Byte[K][V]),Set(Byte[K][V]),Del(Bytes),VisitAll,Write(To),CopyTo,Peek(Bytes),Read(接入数据),Reset,String,Header
 type RequestHeader struct {
 	noCopy noCopy
 
@@ -41,28 +63,6 @@ type RequestHeader struct {
 
 	rawHeaders []byte // 与rawHeadersParsed合用
 
-}
-
-// 禁止直接复制值,正确做法:新建并CopyTo
-// 不可用于并发
-type ResponseHeader struct {
-	noCopy noCopy
-
-	disableNormalizing bool // 禁止格式化头部各字段名;默认启用-首字母大小
-	noHTTP11           bool // 请求是否是 HTTP/1.1
-	connectionClose    bool // 是否已设'Connection: close'响应头
-
-	statusCode         int    // 响应状态码
-	contentLength      int    // 用于响应头: 'Range: bytes=startPos-endPos/contentLength'
-	contentLengthBytes []byte // contentLength的字节化
-
-	contentType []byte // 网页编码:text/plain; charset=utf-8
-	server      []byte // 'Server: Microsoft-IIS/6.0' 'Server: nginx'
-
-	h     []argsKV // 头部数据-键值对
-	bufKV argsKV   // 内部[]byte工具,减少临时变量使用
-
-	cookies []argsKV // 与cookiesCollected合用 i.e.'Set-Cookie: __cfduid=dbab338f0f87894a976; expires=Thu, 23-May-19 03:06:16 GMT; path=/; domain=.cyberciti.org; HttpOnly'
 }
 
 //=========================================
@@ -142,12 +142,12 @@ func (h *ResponseHeader) ResetConnectionClose() {
 
 // 是否设置:'Connection: close'
 func (h *RequestHeader) ConnectionClose() bool {
-	h.parseRawHeader()
+	h.parseRawHeaders()
 	return h.connectionClose
 }
 
 // 简化版-按需
-func (h *RequestHeader) ConnectionCloseFast() bool {
+func (h *RequestHeader) connectionCloseFast() bool {
 	return h.connectionClose
 }
 
@@ -157,8 +157,8 @@ func (h *RequestHeader) SetConnectionClose() {
 }
 
 // 如果已设'Connection: close',清理之
-func (h *RequestHeader) ReSetConnectionClose() {
-	h.parseRawHeader()
+func (h *RequestHeader) ResetConnectionClose() {
+	h.parseRawHeaders()
 	if h.connectionClose {
 		h.connectionClose = false
 		h.h = delAllArgsBytes(h.h, strConnection)
@@ -240,7 +240,7 @@ func (h *RequestHeader) SetContentLength(contentLength int) {
 //--------------------
 // --- ContentType
 // 是否可压缩body: 是否是'text/'or'application/'打头的,是即可压缩
-func (h *ResponseHeader) isCompressiableContentType() bool {
+func (h *ResponseHeader) isCompressibleContentType() bool {
 	contentType := h.ContentType()
 	return bytes.HasPrefix(contentType, strTextSlash) ||
 		bytes.HasPrefix(contentType, strApplicationSlash)
@@ -294,7 +294,7 @@ func (h *RequestHeader) SetContentTypeBytes(contentType []byte) {
 // --- Req.boundary
 // 'Content-Type: multiform/form-data; boundary=...'
 func (h *RequestHeader) SetMultipartFormBoundary(boundary string) {
-	h.parseRawHeader()
+	h.parseRawHeaders()
 
 	b := h.bufKV.value[:0]
 	b = append(b, strMultipartFormData...)
@@ -308,7 +308,7 @@ func (h *RequestHeader) SetMultipartFormBoundary(boundary string) {
 }
 
 func (h *RequestHeader) SetMultipartFormBoundaryBytes(boundary []byte) {
-	h.parseRawHeader()
+	h.parseRawHeaders()
 
 	b := h.bufKV.value[:0]
 	b = append(b, strMultipartFormData...)
@@ -323,7 +323,7 @@ func (h *RequestHeader) SetMultipartFormBoundaryBytes(boundary []byte) {
 
 // 从'Content-Type: multiform/form-data; boundary=...'返回
 func (h *RequestHeader) MultipartFormBoundary() []byte {
-	b := h.COntentType()
+	b := h.ContentType()
 	if !bytes.HasPrefix(b, strMultipartFormData) {
 		return nil
 	}
@@ -401,7 +401,7 @@ func (h *RequestHeader) SetUserAgent(userAgent string) {
 	h.parseRawHeaders()
 	h.userAgent = append(h.userAgent[:0], userAgent...)
 }
-func (h *RequestHeader) SetUserAgentBytes(userAgent string) {
+func (h *RequestHeader) SetUserAgentBytes(userAgent []byte) {
 	h.parseRawHeaders()
 	h.userAgent = append(h.userAgent[:0], userAgent...)
 }
@@ -425,12 +425,13 @@ func (h *RequestHeader) Method() []byte {
 	if len(h.method) == 0 {
 		return strGet
 	}
+	return h.method
 }
 
 func (h *RequestHeader) SetMethod(method string) {
 	h.method = append(h.method[:0], method...)
 }
-func (h *RequestHeader) SetMethodBytes(method string) {
+func (h *RequestHeader) SetMethodBytes(method []byte) {
 	h.method = append(h.method[:0], method...)
 }
 
@@ -503,15 +504,16 @@ func (h *RequestHeader) HasAcceptEncoding(acceptEncoding string) bool {
 	return h.HasAcceptEncodingBytes(h.bufKV.value)
 }
 
+// +优化 q的简单处理
 func (h *RequestHeader) HasAcceptEncodingBytes(acceptEncoding []byte) bool {
 	ae := h.peek(strAcceptEncoding)
 	n := bytes.Index(ae, acceptEncoding)
-	if n < 0 || ae[n-1] != ' ' { // 该字串前1位，是否是分隔符' '
+	if n < 0 {
 		return false
 	}
 	b := ae[n+len(acceptEncoding):]
 	if len(b) > 0 && b[0] != ',' { // 若后续字串有值，且不是',' => 不包含
-		// fast && crude: identity;q=0,
+		// fast && crude: 'identity;q=0,'
 		if len(b) >= 4 && b[0] == ';' && b[1] == 'q' {
 			if len(b) == 4 && b[3] == '0' ||
 				len(b) > 4 && b[3] == '0' && b[4] == ',' {
@@ -522,10 +524,7 @@ func (h *RequestHeader) HasAcceptEncodingBytes(acceptEncoding []byte) bool {
 		}
 		return false
 	}
-	if n == 0 {
-		return true
-	}
-	return true
+	return n == 0 || ae[n-1] == ' ' // 该字串前1位，是否是分隔符' '
 }
 
 // --- Resp.Length of 响应头选项
@@ -614,7 +613,7 @@ func (h *ResponseHeader) CopyTo(dst *ResponseHeader) {
 	dst.server = append(dst.server[:0], h.server...)
 
 	dst.h = copyArgs(dst.h, h.h)
-	dst.cookies = copy(dst.cookies, h.cookies)
+	dst.cookies = copyArgs(dst.cookies, h.cookies)
 }
 
 func (h *RequestHeader) CopyTo(dst *RequestHeader) {
@@ -639,7 +638,7 @@ func (h *RequestHeader) CopyTo(dst *RequestHeader) {
 	dst.cookiesCollected = h.cookiesCollected
 
 	dst.rawHeaders = append(dst.rawHeaders[:0], h.rawHeaders...)
-	dst.rawHeadersParsed = false
+	dst.rawHeadersParsed = h.rawHeadersParsed
 }
 
 // --- VisitAll
@@ -667,7 +666,7 @@ func (h *ResponseHeader) VisitAll(f func(key, value []byte)) {
 	}
 }
 func (h *RequestHeader) VisitAll(f func(key, value []byte)) {
-	h.parseRawHeader()
+	h.parseRawHeaders()
 	host := h.Host()
 	if len(host) > 0 {
 		f(strHost, host)
@@ -701,6 +700,8 @@ func (h *ResponseHeader) VisitAllCookie(f func(key, value []byte)) {
 	visitArgs(h.cookies, f)
 }
 func (h *RequestHeader) VisitAllCookie(f func(key, value []byte)) {
+	h.parseRawHeaders()
+	h.collectCookies()
 	visitArgs(h.cookies, f)
 }
 
@@ -711,7 +712,7 @@ func (h *ResponseHeader) Del(key string) {
 }
 
 func (h *ResponseHeader) DelBytes(key []byte) {
-	h.bufKV.key = append(h.buffKV.key[:0], key...)
+	h.bufKV.key = append(h.bufKV.key[:0], key...)
 	normalizeHeaderKey(h.bufKV.key, h.disableNormalizing)
 	h.del(h.bufKV.key)
 }
@@ -724,7 +725,7 @@ func (h *ResponseHeader) del(key []byte) {
 	case "Set-Cookie":
 		h.cookies = h.cookies[:0]
 	case "Content-Length":
-		h.contentLenght = 0
+		h.contentLength = 0
 		h.contentLengthBytes = h.contentLengthBytes[:0]
 	case "Connection":
 		h.connectionClose = false
@@ -740,7 +741,7 @@ func (h *RequestHeader) Del(key string) {
 
 func (h *RequestHeader) DelBytes(key []byte) {
 	h.parseRawHeaders()
-	h.bufKV.key = append(h.buffKV.key[:0], key...)
+	h.bufKV.key = append(h.bufKV.key[:0], key...)
 	normalizeHeaderKey(h.bufKV.key, h.disableNormalizing)
 	h.del(h.bufKV.key)
 }
@@ -755,7 +756,7 @@ func (h *RequestHeader) del(key []byte) {
 	case "Cookie":
 		h.cookies = h.cookies[:0]
 	case "Content-Length":
-		h.contentLenght = 0
+		h.contentLength = 0
 		h.contentLengthBytes = h.contentLengthBytes[:0]
 	case "Connection":
 		h.connectionClose = false
@@ -782,7 +783,7 @@ func (h *ResponseHeader) AddBytesKV(key, value []byte) {
 // --- Resp.Set: 'key: value' => h.h
 func (h *ResponseHeader) Set(key, value string) {
 	initHeaderKV(&h.bufKV, key, value, h.disableNormalizing)
-	h.SetCanonical(h.bufKV.key, h.buffKV.value)
+	h.SetCanonical(h.bufKV.key, h.bufKV.value)
 }
 
 // 取标准 头选项 名
@@ -808,9 +809,9 @@ func (h *ResponseHeader) SetBytesKV(key, value []byte) {
 func (h *ResponseHeader) SetCanonical(key, value []byte) {
 	switch string(key) {
 	case "Content-Type":
-		h.SetContentTypeBytes(key, value)
+		h.SetContentTypeBytes(value)
 	case "Server":
-		h.SetServerBytes(key, value)
+		h.SetServerBytes(value)
 	case "Set-Cookie":
 		var kv *argsKV
 		h.cookies, kv = allocArg(h.cookies)
@@ -818,8 +819,8 @@ func (h *ResponseHeader) SetCanonical(key, value []byte) {
 		kv.value = append(kv.value[:0], value...)
 	case "Content-Length":
 		if contentLength, err := parseContentLength(value); err == nil {
-			h.conentLenght = contentLength
-			h.contentLengthBytes = AppendUint(h.contentLengthBytes[:0], value...)
+			h.contentLength = contentLength
+			h.contentLengthBytes = append(h.contentLengthBytes[:0], value...)
 		}
 	case "Connection":
 		if bytes.Equal(strClose, value) {
@@ -841,7 +842,7 @@ func (h *ResponseHeader) SetCanonical(key, value []byte) {
 // - Resp
 // 返回后，保存重利用cookie todo??
 func (h *ResponseHeader) SetCookie(cookie *Cookie) {
-	h.cookies = setArgBytes(h.cookies, cookie.Key(), cookie.Value())
+	h.cookies = setArgBytes(h.cookies, cookie.Key(), cookie.Cookie())
 }
 
 // - Req
@@ -853,9 +854,9 @@ func (h *RequestHeader) SetCookie(key, value string) {
 func (h *RequestHeader) SetCookieBytesK(key []byte, value string) {
 	h.SetCookie(b2s(key), value)
 }
-func (h *RequestHeader) SetCookieBytesV(key string, value []byte) {
-	h.SetCookie(key, b2s(value))
-}
+//func (h *RequestHeader) SetCookieBytesV(key string, value []byte) {
+//	h.SetCookie(key, b2s(value))
+//}
 func (h *RequestHeader) SetCookieBytesKV(key, value []byte) {
 	h.SetCookie(b2s(key), b2s(value))
 }
@@ -864,11 +865,11 @@ func (h *RequestHeader) SetCookieBytesKV(key, value []byte) {
 // - Resp
 // 通知客户端，移除指定cookie
 func (h *ResponseHeader) DelClientCookie(key string) {
-	h.DelCoookie(key)
+	h.DelCookie(key)
 
 	c := AcquireCookie()
 	c.SetKey(key)
-	c.SetExpire(CoookieExpireDelete)
+	c.SetExpire(CookieExpireDelete)
 	h.SetCookie(c)
 	ReleaseCookie(c)
 }
@@ -926,7 +927,7 @@ func (h *RequestHeader) Set(key, value string) {
 	h.SetCanonical(h.bufKV.key, h.bufKV.value)
 }
 func (h *RequestHeader) SetBytesK(key []byte, value string) {
-	h.bufKV.value = append(h.buvKV.value[:0], value...)
+	h.bufKV.value = append(h.bufKV.value[:0], value...)
 	h.SetBytesKV(key, h.bufKV.value)
 }
 func (h *RequestHeader) SetBytesV(key string, value []byte) {
@@ -935,31 +936,31 @@ func (h *RequestHeader) SetBytesV(key string, value []byte) {
 }
 func (h *RequestHeader) SetBytesKV(key, value []byte) {
 	h.bufKV.key = append(h.bufKV.key[:0], key...)
-	normalizeHeaderKey(h.buvKV.key, h.disableNormalizing)
+	normalizeHeaderKey(h.bufKV.key, h.disableNormalizing)
 	h.SetCanonical(h.bufKV.key, value)
 }
 func (h *RequestHeader) SetCanonical(key, value []byte) {
 	h.parseRawHeaders()
 	switch string(key) {
 	case "Host":
-		h.SetHostBytes(key, value)
+		h.SetHostBytes(value)
 	case "Content-Type":
-		h.SetContentTypeBytes(key, value)
+		h.SetContentTypeBytes(value)
 	case "User-Agent":
-		h.SetUserAgentBytes(key, value)
+		h.SetUserAgentBytes(value)
 	case "Cookie":
 		h.collectCookies()
 		h.cookies = parseRequestCookies(h.cookies, value)
 	case "Content-Length":
 		if contentLength, err := parseContentLength(value); err == nil {
 			h.contentLength = contentLength
-			h.contentLengthBytes = appendUint(h.contentLengthBytes[:0], value...)
+			h.contentLengthBytes = append(h.contentLengthBytes[:0], value...)
 		}
 	case "Connection":
 		if bytes.Equal(strClose, value) {
 			h.SetConnectionClose()
 		} else {
-			h.ReSetConnectionClose()
+			h.ResetConnectionClose()
 			h.h = setArgBytes(h.h, key, value)
 		}
 	case "Transfer-Encoding":
@@ -976,7 +977,7 @@ func (h *ResponseHeader) Peek(key string) []byte {
 	return h.peek(k)
 }
 func (h *ResponseHeader) PeekBytes(key []byte) []byte {
-	h.bufKV.key = append(h.bufKV, key, h.disableNormalizing)
+	h.bufKV.key = append(h.bufKV.key[:0], key...)
 	normalizeHeaderKey(h.bufKV.key, h.disableNormalizing)
 	return h.peek(h.bufKV.key)
 }
@@ -986,7 +987,7 @@ func (h *RequestHeader) Peek(key string) []byte {
 	return h.peek(k)
 }
 func (h *RequestHeader) PeekBytes(key []byte) []byte {
-	h.bufKV.key = append(h.bufKV, key, h.disableNormalizing)
+	h.bufKV.key = append(h.bufKV.key[:0], key...)
 	normalizeHeaderKey(h.bufKV.key, h.disableNormalizing)
 	return h.peek(h.bufKV.key)
 }
@@ -1008,12 +1009,13 @@ func (h *ResponseHeader) peek(key []byte) []byte {
 	}
 }
 func (h *RequestHeader) peek(key []byte) []byte {
+	h.parseRawHeaders()
 	switch string(key) {
 	case "Host":
 		return h.Host()
 	case "Content-Type":
 		return h.ContentType()
-	case "user-Agent":
+	case "User-Agent":
 		return h.UserAgent()
 	case "Connection":
 		if h.ConnectionClose() {
@@ -1071,11 +1073,12 @@ func (h *ResponseHeader) tryRead(r *bufio.Reader, n int) error {
 	h.resetSkipNormalize()
 	b, err := r.Peek(n)
 	if len(b) == 0 {
+		// treat all errors on the first byte read as EOF
 		if n == 1 || err == io.EOF {
 			return io.EOF
 		}
 
-		// go 1.6 bug todo??
+		// go 1.6 bug. See https://github.com/golang/go/issues/14121 . todo??
 		if err == bufio.ErrBufferFull {
 			return &ErrSmallBuffer{
 				error: fmt.Errorf("error when reading response headers: %s", errSmallBuffer),
@@ -1101,7 +1104,7 @@ func headerError(typ string, err, errParse error, b []byte) error {
 		return errNeedMore
 	}
 
-	// 简陋、早期网站，会遗留 CRLFs,当做EOF
+	// 简陋、早期网站，在body后会遗留 CRLFs,当做EOF
 	if isOnlyCRLF(b) {
 		return io.EOF
 	}
@@ -1110,7 +1113,7 @@ func headerError(typ string, err, errParse error, b []byte) error {
 		return headerErrorMsg(typ, err, b)
 	}
 	return &ErrSmallBuffer{
-		error: headerErrormsg(typ, errSmallBuffer, b),
+		error: headerErrorMsg(typ, errSmallBuffer, b),
 	}
 }
 
@@ -1182,7 +1185,7 @@ func bufferSnippet(b []byte) string {
 	return fmt.Sprintf("%q...%q", bStart, bEnd)
 }
 func isOnlyCRLF(b []byte) bool {
-	for _, ch = range b {
+	for _, ch := range b {
 		if ch != '\r' && ch != '\n' {
 			return false
 		}
@@ -1196,7 +1199,7 @@ func init() { // todo?? 开关控制
 	refreshServerDate()
 	go func() {
 		for {
-			time.Sleep(time.Sleep)
+			time.Sleep(time.Second)
 			refreshServerDate()
 		}
 	}()
@@ -1218,7 +1221,8 @@ func (h *ResponseHeader) Write(w *bufio.Writer) error {
 	return err
 }
 
-func (h *ResponseHeader) WriteTo(w *bufio.Writer) (int64, error) {
+// WriteTo 实现 io.WriterTo 接口.
+func (h *ResponseHeader) WriteTo(w io.Writer) (int64, error) {
 	n, err := w.Write(h.Header())
 	return int64(n), err
 }
@@ -1238,7 +1242,7 @@ func (h *ResponseHeader) String() string {
 // 1.首行-状态码(默认200) 'HTTP/1.1 200 OK' 'HTTP/1.1 502 Fiddler - Connection Failed'
 // 2.Server信息 - 未设使用默认
 // 3.serverDate信息
-// 4.Content-Type信息-仅用于非空body响应
+// 4.Content-Type信息-仅非空body响应或明确指定
 // 5.ContentLength
 // 6.其它h.h中设置的头信息-非strDate
 // 7.Set-Cookie
@@ -1276,13 +1280,13 @@ func (h *ResponseHeader) AppendBytes(dst []byte) []byte {
 	n := len(h.cookies)
 	if n > 0 {
 		for i := 0; i < n; i++ {
-			kv := &h.cookie[k]
-			dst = append(dst, strSetCookie, kv.value)
+			kv := &h.cookies[i]
+			dst = appendHeaderLine(dst, strSetCookie, kv.value)
 		}
 	}
 
 	if h.ConnectionClose() {
-		dst = append(dst, strConnection, strClose)
+		dst = appendHeaderLine(dst, strConnection, strClose)
 	}
 	return append(dst, strCRLF...)
 }
@@ -1293,8 +1297,8 @@ func (h *RequestHeader) Write(w *bufio.Writer) error {
 	_, err := w.Write(h.Header())
 	return err
 }
-
-func (h *RequestHeader) WriteTo(w *bufio.Writer) (int64, error) {
+// WriteTo 实现 io.WriterTo 接口.
+func (h *RequestHeader) WriteTo(w io.Writer) (int64, error) {
 	n, err := w.Write(h.Header())
 	return int64(n), err
 }
@@ -1312,7 +1316,7 @@ func (h *RequestHeader) String() string {
 
 // 整理头部信息到buf中
 // 1.首行-'GET /foo/bar/baz.php?q=xx#ffdd HTTP/1.1\r\n'
-// 2.判定头部是否已解析-未解析，直接返回之-无需paresRawHeader
+// 2.判定头部-非空&&未解析，直接返回之-无需paresRawHeader
 // 3.UserAgent
 // 4.Host
 // 5.ContentType:
@@ -1331,7 +1335,7 @@ func (h *RequestHeader) AppendBytes(dst []byte) []byte {
 	dst = append(dst, strHTTP11...)
 	dst = append(dst, strCRLF...)
 
-	if !h.rawHeadersParsed {
+	if !h.rawHeadersParsed && len(h.rawHeaders) > 0 {
 		return append(dst, h.rawHeaders...)
 	}
 
@@ -1349,7 +1353,7 @@ func (h *RequestHeader) AppendBytes(dst []byte) []byte {
 	contentType := h.ContentType()
 	if !h.noBody() {
 		if len(contentType) == 0 {
-			contentType = strPost
+			contentType = strPostArgsContentType
 		}
 		dst = appendHeaderLine(dst, strContentType, contentType)
 
@@ -1370,7 +1374,7 @@ func (h *RequestHeader) AppendBytes(dst []byte) []byte {
 	if n > 0 {
 		dst = append(dst, strCookie...)
 		dst = append(dst, strColonSpace...)
-		dst = appendRequestCookieBytes(dst, h.cookies...)
+		dst = appendRequestCookieBytes(dst, h.cookies)
 		dst = append(dst, strCRLF...)
 	}
 
@@ -1384,8 +1388,7 @@ func appendHeaderLine(dst, key, value []byte) []byte {
 	dst = append(dst, key...)
 	dst = append(dst, strColonSpace...)
 	dst = append(dst, value...)
-	dst = append(dst, strCRLF...)
-	return dst
+	return append(dst, strCRLF...)
 }
 
 // --- parse
@@ -1415,7 +1418,7 @@ func (h *RequestHeader) parse(buf []byte) (int, error) {
 	}
 
 	var n int
-	if !h.noBody() || h.noHTTP11 {
+	if !h.noBody() || h.noHTTP11 { // 有body || HTTP/1.1
 		n, err = h.parseHeaders(buf[m:])
 		if err != nil {
 			return 0, err
@@ -1447,7 +1450,7 @@ func (h *ResponseHeader) parseFirstLine(buf []byte) (int, error) {
 	//parse protocol
 	n := bytes.IndexByte(b, ' ')
 	if n < 0 {
-		return 0, fmt.Errorf("cannot find whitespace in first line of response %q", buf)
+		return 0, fmt.Errorf("cannot find whitespace in the first line of response %q", buf)
 	}
 	h.noHTTP11 = !bytes.Equal(b[:n], strHTTP11)
 	b = b[n+1:]
@@ -1491,12 +1494,414 @@ func (h *RequestHeader) parseFirstLine(buf []byte) (int, error) {
 		n = len(b)
 	} else if n == 0 { //第1空格后，紧接1空格
 		return 0, fmt.Errorf("requestURI cannot be empty in %q", buf)
-	} else if len(b) > !bytes.Equal(b[n+1:], strHTTP11) {
+	} else if !bytes.Equal(b[n+1:], strHTTP11) {
 		h.noHTTP11 = true
 	}
 	h.requestURI = append(h.requestURI[:0], b[:n]...)
 
 	return len(buf) - len(bNext), nil
+}
+
+// +优化
+// 在RawHeader字串中，查找key字串对应值 'Connection: keep-alive'
+//  1.找到key位置
+//  2.确定找到的位置：(若为中间&&往前一位为'\n') && 往后有内容 && key以':'结尾 && 该位置往后一位为' '
+//  4.找到往后的'\n'作为值，移除'\r'
+func peekRawHeader(buf, key []byte) []byte {
+	n := bytes.Index(buf, key)
+	if n < 0 {
+		return nil
+	}
+	if n > 0 && buf[n-1] != '\n' {
+		return nil
+	}
+	n += len(key)
+	// buf => 'Connection: \n' => asset(len(buf) > n+3)
+	// n   =>            ^
+	// ps: n 是索引，与len比较，多加1
+	// n+3判定，用于规避buf[n]超过cap(buf)引发的panic
+	if n+3 >= len(buf) {
+		return nil
+	}
+	if buf[n] != ':' || buf[n+1] != ' ' {
+		return nil
+	}
+	n += 2
+	buf = buf[n:]
+
+	n = bytes.IndexByte(buf, '\n')
+	if n < 0 {
+		return nil
+	}
+	if n > 0 && buf[n-1] == '\r' {
+		n--
+	}
+	return buf[:n]
+}
+
+// RequestHeader.Read
+// 非http1&&无body => 不以'\r\n'、'\n'开头，且不仅一行，且以'\r\n\r\n'为分隔符
+func readRawHeaders(dst, buf []byte) ([]byte, int, error) {
+	n := bytes.IndexByte(buf, '\n')
+	if n < 0 {
+		return nil, 0, errNeedMore
+	}
+	if (n == 1 && buf[0] == '\r') || n == 0 {
+		// empty headers
+		return dst, n + 1, nil
+	}
+
+	n++
+	b := buf
+	m := n
+	for {
+		b = b[m:]
+		m = bytes.IndexByte(b, '\n')
+		if m < 0 {
+			return nil, 0, errNeedMore
+		}
+		m++
+		n += m
+		if (m == 2 && b[0] == '\r') || m == 1 {
+			dst = append(dst, buf[:n]...)
+			return dst, n, nil
+		}
+	}
+}
+
+// --- parseHeaders
+// - Resp
+func (h *ResponseHeader) parseHeaders(buf []byte) (int, error) {
+	// 默认identify: ContentLength=-2
+	h.contentLength = -2
+
+	var s headerScanner
+	s.b = buf
+	s.disableNormalizing = h.disableNormalizing
+	var err error
+	var kv *argsKV
+	for s.next() {
+		switch string(s.key) {
+		case "Content-Type":
+			h.contentType = append(h.contentType[:0], s.value...)
+		case "Server":
+			h.server = append(h.server[:0], s.value...)
+		case "Content-Length":
+			if h.contentLength != -1 {
+				if h.contentLength, err = parseContentLength(s.value); err != nil {
+					h.contentLength = -2
+				} else {
+					h.contentLengthBytes = append(h.contentLengthBytes[:0], s.value...)
+				}
+			}
+		case "Transfer-Encoding":
+			if !bytes.Equal(s.value, strIdentity) {
+				h.contentLength = -1
+				h.h = setArgBytes(h.h, strTransferEncoding, strChunked)
+			}
+		case "Set-Cookie":
+			h.cookies, kv = allocArg(h.cookies)
+			kv.key = getCookieKey(kv.key, s.value) // 截取其中key
+			kv.value = append(kv.value[:0], s.value...)
+		case "Connection":
+			if bytes.Equal(s.value, strClose) {
+				h.connectionClose = true
+			} else {
+				h.connectionClose = false
+				h.h = appendArgBytes(h.h, s.key, s.value)
+			}
+		default:
+			h.h = appendArgBytes(h.h, s.key, s.value)
+		}
+	}
+	if s.err != nil {
+		h.connectionClose = true
+		return 0, s.err
+	}
+	if h.contentLength < 0 {
+		h.contentLengthBytes = h.contentLengthBytes[:0]
+	}
+	// identity 若contentLength判定为-2，优先为inentity todo??
+	if h.contentLength == -2 && !h.ConnectionUpgrade() && !h.mustSkipContentLength() {
+		h.h = setArgBytes(h.h, strTransferEncoding, strIdentity)
+		h.connectionClose = true
+	}
+	if h.noHTTP11 && !h.connectionClose {
+		// 除非显示设置'Connection: keep-alive',否则非HTTP/1.1(即HTTP/1.0)，直接关闭连接
+		v := peekArgBytes(h.h, strConnection)
+		h.connectionClose = !hasHeaderValue(v, strKeepAlive) && !hasHeaderValue(v, strKeepAliveCamelCase)
+	}
+
+	return len(buf) - len(s.b), nil
+}
+
+func (h *RequestHeader) parseHeaders(buf []byte) (int, error) {
+	h.contentLength = -2
+
+	var s headerScanner
+	s.b = buf
+	s.disableNormalizing = h.disableNormalizing
+	var err error
+	for s.next() {
+		switch string(s.key) {
+		case "Host":
+			h.host = append(h.host[:0], s.value...)
+		case "User-Agent":
+			h.userAgent = append(h.userAgent[:0], s.value...)
+		case "Content-Type":
+			h.contentType = append(h.contentType[:0], s.value...)
+		case "Content-Length":
+			if h.contentLength != -1 {
+				if h.contentLength, err = parseContentLength(s.value); err != nil {
+					h.contentLength = -2
+				} else {
+					h.contentLengthBytes = append(h.contentLengthBytes[:0], s.value...)
+				}
+			}
+		case "Transfer-Encoding":
+			if !bytes.Equal(s.value, strIdentity) {
+				h.contentLength = -1
+				h.h = setArgBytes(h.h, strTransferEncoding, strChunked)
+			}
+		case "Connection":
+			if bytes.Equal(s.value, strClose) {
+				h.connectionClose = true
+			} else {
+				h.connectionClose = false
+				h.h = appendArgBytes(h.h, s.key, s.value)
+			}
+		default:
+			h.h = appendArgBytes(h.h, s.key, s.value)
+		}
+	}
+	if s.err != nil {
+		h.connectionClose = true
+		return 0, s.err
+	}
+
+	if h.contentLength < 0 {
+		h.contentLengthBytes = h.contentLengthBytes[:0]
+	}
+	if h.noBody() {
+		h.contentLength = 0
+		h.contentLengthBytes = h.contentLengthBytes[:0]
+	}
+	if h.noHTTP11 && !h.connectionClose {
+		v := peekArgBytes(h.h, strConnection)
+		h.connectionClose = !hasHeaderValue(v, strKeepAlive) && !hasHeaderValue(v, strKeepAliveCamelCase)
+	}
+
+	return len(buf) - len(s.b), nil
+}
+
+// --- Req.parseRawHeaders
+func (h *RequestHeader) parseRawHeaders() {
+	if h.rawHeadersParsed {
+		return
+	}
+	h.rawHeadersParsed = true
+	if len(h.rawHeaders) == 0 {
+		return
+	}
+	h.parseHeaders(h.rawHeaders)
+}
+
+// --- Req.collectCookies
+// 找到h.h中的strCookie项，解析并移除(移到最后)
+func (h *RequestHeader) collectCookies() {
+	if h.cookiesCollected {
+		return
+	}
+
+	for i, n := 0, len(h.h); i < n; i++ {
+		kv := &h.h[i]
+		if bytes.Equal(kv.key, strCookie) {
+			h.cookies = parseRequestCookies(h.cookies, kv.value)
+			tmp := *kv
+			copy(h.h[i:], h.h[i+1:])
+			n--
+			i--
+			h.h[n] = tmp
+			h.h = h.h[:n]
+		}
+	}
+	h.cookiesCollected = true
+}
+
+// ================================
+func parseContentLength(b []byte) (int, error) {
+	v, n, err := parseUintBuf(b)
+	if err != nil {
+		return -1, err
+	}
+	if n != len(b) {
+		return -1, fmt.Errorf("non-numeric chars at the end of Content-Length")
+	}
+	return v, nil
+}
+
+// ================================
+// 头选项解析器:
+//   * 行末判定 '\r\n' '\n'
+//   * 分隔符':' - 未找到，返回需要更多
+//   * 取得key,并格式化
+//   * 取value: 去除头部空格, 以'\n'结尾
+//   * 去除value尾部空格、'\r'
+type headerScanner struct {
+	b     []byte
+	key   []byte
+	value []byte
+	err   error
+
+	disableNormalizing bool
+}
+
+func (s *headerScanner) next() bool {
+	bLen := len(s.b)
+	if bLen >= 2 && s.b[0] == '\r' && s.b[1] == '\n' { //空行
+		s.b = s.b[2:]
+		return false
+	}
+	if bLen >= 1 && s.b[0] == '\n' { //空行
+		s.b = s.b[1:]
+		return false
+	}
+	n := bytes.IndexByte(s.b, ':')
+	if n < 0 {
+		s.err = errNeedMore
+		return false
+	}
+
+	s.key = s.b[:n] // 默认输入格式'Connection: keep-alive'
+	normalizeHeaderKey(s.key, s.disableNormalizing)
+	n++
+	for len(s.b) > n && s.b[n] == ' ' {
+		n++
+	}
+	s.b = s.b[n:]
+	n = bytes.IndexByte(s.b, '\n')
+	if n < 0 {
+		s.err = errNeedMore
+		return false
+	}
+	s.value = s.b[:n]
+	s.b = s.b[n+1:]
+
+	if n > 0 && s.value[n-1] == '\r' {
+		n--
+	}
+	for n > 0 && s.value[n-1] == ' ' {
+		n--
+	}
+	s.value = s.value[:n]
+	return true
+}
+
+// ================================
+// 扫描一个选项的值字串:
+//   * 若有','，以之作分隔
+//   * 否则，直接返回该值
+// ps: 返回值，去除头尾空格
+type headerValueScanner struct {
+	b     []byte
+	value []byte
+}
+
+func (s *headerValueScanner) next() bool {
+	b := s.b
+	if len(b) == 0 {
+		return false
+	}
+	n := bytes.IndexByte(b, ',')
+	if n < 0 {
+		s.value = stripSpace(b)
+		s.b = b[len(b):]
+		return true
+	}
+	s.value = stripSpace(b[:n])
+	s.b = b[n+1:] //无需越界判定，slice支持 b[len(b):]操作
+	return true
+}
+
+// 去除头尾空格
+func stripSpace(b []byte) []byte {
+	for len(b) > 0 && b[0] == ' ' {
+		b = b[1:]
+	}
+	for len(b) > 0 && b[len(b)-1] == ' ' {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+func hasHeaderValue(s, value []byte) bool {
+	var vs headerValueScanner
+	vs.b = s
+	for vs.next() {
+		if bytes.Equal(vs.value, value) {
+			return true
+		}
+	}
+	return false
+}
+
+//=================================
+// 以\n为分隔，返回内容
+func nextLine(b []byte) ([]byte, []byte, error) {
+	nNext := bytes.IndexByte(b, '\n')
+	if nNext < 0 {
+		return nil, nil, errNeedMore
+	}
+	n := nNext
+	if n > 0 && b[n-1] == '\r' {
+		n--
+	}
+	return b[:n], b[nNext+1:], nil
+}
+
+func initHeaderKV(kv *argsKV, key, value string, disableNormalizing bool) {
+	kv.key = getHeaderKeyBytes(kv, key, disableNormalizing)
+	kv.value = append(kv.value[:0], value...)
+}
+
+func getHeaderKeyBytes(kv *argsKV, key string, disableNormalizing bool) []byte {
+	kv.key = append(kv.key[:0], key...)
+	normalizeHeaderKey(kv.key, disableNormalizing)
+	return kv.key
+}
+
+func normalizeHeaderKey(b []byte, disableNormalizing bool) {
+	if disableNormalizing {
+		return
+	}
+
+	n := len(b)
+	if n == 0 {
+		return
+	}
+
+	b[0] = toUpperTable[b[0]]
+	for i := 1; i < n; i++ {
+		p := &b[i]
+		if *p == '-' {
+			i++
+			if i < n {
+				b[i] = toUpperTable[b[i]]
+			}
+			continue
+		}
+		*p = toLowerTable[*p]
+	}
+}
+
+//将key格式化(首字母大写)附加到dst上
+func AppendNormalizedHeaderKey(dst []byte, key string) []byte {
+	dst = append(dst, key...)
+	normalizeHeaderKey(dst[len(dst)-len(key):], false)
+	return dst
+}
+func AppendNormalizedHeaderKeyBytes(dst , key []byte) []byte {
+	return AppendNormalizedHeaderKey(dst, b2s(key))
 }
 
 // ================================
@@ -1523,6 +1928,6 @@ func mustPeekBuffered(r *bufio.Reader) []byte {
 // 该函数确保丢弃指定字节
 func mustDiscard(r *bufio.Reader, n int) {
 	if _, err := r.Discard(n); err != nil {
-		panic(fmt.Errorf("bufio.Reader.Discard(%d) failed: %s", n, err))
+		panic(fmt.Sprintf("bufio.Reader.Discard(%d) failed: %s", n, err))
 	}
 }

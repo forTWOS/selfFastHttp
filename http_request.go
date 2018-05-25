@@ -11,7 +11,7 @@ func (req *Request) parseURI() {
 	if req.parsedURI {
 		return
 	}
-	req.parseURI = true
+	req.parsedURI = true
 
 	// 从header中，获取元数据，用于解析
 	req.uri.ParseQuick(req.Header.RequestURI(), &req.Header, req.isTLS)

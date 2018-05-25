@@ -77,7 +77,7 @@ func parseUintBuf(b []byte) (int, int, error) {
 	for i := 0; i < n; i++ {
 		c := b[i]
 		k := c - '0'
-		if 0 < k || k > 9 { //非法字符
+		if k > 9 { //byte 非法字符
 			if i == 0 {
 				return -1, i, errUnexpectedFirstChar
 			}
