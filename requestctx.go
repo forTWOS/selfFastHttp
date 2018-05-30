@@ -1,8 +1,13 @@
 package selfFastHttp
 
 import (
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -43,15 +48,10 @@ type RequestCtx struct {
 	fbr    firstByteReader //特定条件使用的读取器
 
 	timeoutResponse *Response   //超时标志器-用于超时后相关处理
-	timeoutCh       struct{}    //超时管道,在等待处理结束时，定时
+	timeoutCh       chan struct{}    //超时管道,在等待处理结束时，定时
 	timeoutTimer    *time.Timer //超时定时器，与timeoutCh合用，最后调用TimeoutError设置timeoutResponse
 
 	hijackHandler HijackHandler
-}
-
-//===================================
-var zeroTCPAddr = &net.TCPAddr{
-	IP: net.IPv4zero,
 }
 
 //===================================
@@ -82,23 +82,64 @@ func (ctx *RequestCtx) Hijacked() bool {
 	return ctx.hijackHandler != nil
 }
 
-//===================================
-// 请求的日志输出，用一个全局锁 todo
-var ctxLoggerLock sync.Mutex
-
-//===================================
-// 目的：写日志时，自动输出RequestCtx部分信息
-type ctxLogger struct {
-	ctx    *RequestCtx
-	logger Logger
+// 控key存储任意value
+// value可能包含UserValue*-嵌套
+// 请求流程中，函数间传任意值
+// 当从RequestHandler返回，所有值被移除;另外，所有value会尝试io.Closer关闭操作
+func (ctx *RequestCtx) SetUserValue(key string, value interface{}) {
+	ctx.userValues.Set(key, value)
 }
 
-func (cl *ctxLogger) Printf(format string, args ...interface{}) {
-	ctxLoggerLock.Lock()
-	msg := fmt.Sprintf(format, args...)
-	ctx := cl.ctx
-	cl.logger.Printf("%.3f %s - %s", time.Since(ctx.Time()).Seconds(), ctx.String(), msg)
-	ctxLoggerLock.Unlock()
+// 控key存储任意value
+// value可能包含UserValue*-嵌套
+// 请求流程中，函数间传任意值
+// 当从RequestHandler返回，所有值被移除;另外，所有value会尝试io.Closer关闭操作
+func (ctx *RequestCtx) SetUserValueBytes(key []byte, value interface{}) {
+	ctx.userValues.SetBytes(key, value)
+}
+
+func (ctx *RequestCtx) UserValue(key string) interface{} {
+	return ctx.userValues.Get(key)
+}
+func (ctx *RequestCtx) UserValueBytes(key []byte) interface{} {
+	return ctx.userValues.GetBytes(key)
+}
+
+func (ctx *RequestCtx) VisitUserValues(visitor func([]byte, interface{})) {
+	for i, n := 0, len(ctx.userValues); i < n; i++ {
+		kv := &ctx.userValues[i]
+		visitor(kv.key, kv.value)
+	}
+}
+
+// --- connTlsSer
+type connTLSer interface {
+	ConnectionState() tls.ConnectionState
+}
+
+// tls.Conn is an encrypted connection (aka SSL, HTTPS).
+func (ctx *RequestCtx) IsTLS() bool {
+	// 转换成connTLSer，而不是*tls.Conn，是因为有此情况，会覆盖tls.Conn,例如: todo??
+	//
+	// type customConn struct {
+	//	    *tls.Conn
+	//
+	//		// other custom fields
+	// }
+	_, ok := ctx.c.(connTLSer)
+	return ok
+}
+
+// TLS connection state.
+// 非tls，返回nil
+// 返回值，可用于确定tls版本,客户端证书
+func (ctx *RequestCtx) TLSConnectionState() *tls.ConnectionState {
+	tlsConn, ok := ctx.c.(connTLSer)
+	if !ok {
+		return nil
+	}
+	state := tlsConn.ConnectionState()
+	return &state
 }
 
 //===================================
@@ -125,6 +166,34 @@ func (r *firstByteReader) Read(b []byte) (int, error) {
 	}
 	n, err := r.c.Read(b)
 	return n + nn, err
+}
+
+type Logger interface {
+	Printf(format string, args ...interface{})
+}
+
+//===================================
+// 请求的日志输出，用一个全局锁 todo
+var ctxLoggerLock sync.Mutex
+
+//===================================
+// 目的：写日志时，自动输出RequestCtx部分信息
+type ctxLogger struct {
+	ctx    *RequestCtx
+	logger Logger
+}
+
+func (cl *ctxLogger) Printf(format string, args ...interface{}) {
+	ctxLoggerLock.Lock()
+	msg := fmt.Sprintf(format, args...)
+	ctx := cl.ctx
+	cl.logger.Printf("%.3f %s - %s", time.Since(ctx.Time()).Seconds(), ctx.String(), msg)
+	ctxLoggerLock.Unlock()
+}
+
+//===================================
+var zeroTCPAddr = &net.TCPAddr{
+	IP: net.IPv4zero,
 }
 
 //---------------------------------
@@ -158,6 +227,10 @@ func (ctx *RequestCtx) SetConnectionClose() {
 	ctx.Response.SetConnectionClose()
 }
 
+func (ctx *RequestCtx) SetStatusCode(statusCode int) {
+	ctx.Response.SetStatusCode(statusCode)
+}
+
 // 设置:响应类型
 func (ctx *RequestCtx) SetContentType(contentType string) {
 	ctx.Response.Header.SetContentType(contentType)
@@ -186,6 +259,117 @@ func (ctx *RequestCtx) Referer() []byte {
 // 请求中的用户代理
 func (ctx *RequestCtx) UserAgent() []byte {
 	return ctx.Request.Header.UserAgent()
+}
+
+func (ctx *RequestCtx) Path() []byte {
+	return ctx.URI().Path()
+}
+
+func (ctx *RequestCtx) Host() []byte {
+	return ctx.URI().Host()
+}
+
+func (ctx *RequestCtx) QueryArgs() *Args {
+	return ctx.URI().QueryArgs()
+}
+
+func (ctx *RequestCtx) PostArgs() *Args {
+	return ctx.Request.PostArgs()
+}
+
+// requests's multipart form.
+// 若不包启'multipart/form-data'头，返回ErrNoMultipartForm
+// 所有上传的临时文件，在RequestHandler返回后，删除;直接移动或复制文件到新地方，来保存之
+// SaveMultipartFile用于永久保存上传的文件
+func (ctx *RequestCtx) MultipartForm() (*multipart.Form, error) {
+	return ctx.Request.MultipartForm()
+}
+
+// 按key返回上传的文件
+// 所有上传的临时文件，在RequestHandler返回后，删除;直接移动或复制文件到新地方，来保存之
+// SaveMultipartFile用于永久保存上传的文件
+func (ctx *RequestCtx) FormFile(key string) (*multipart.FileHeader, error) {
+	mf, err := ctx.MultipartForm()
+	if err != nil {
+		return nil, err
+	}
+	if mf.File == nil {
+		return nil, err
+	}
+	fhh := mf.File[key]
+	if fhh == nil {
+		return nil, ErrMissingFile
+	}
+	return fhh[0], nil
+}
+
+var ErrMissingFile = errors.New("there is no uploaded file associated with the given key")
+
+// 永久保存上传文件 成 新指定文件
+func SaveMultipartFile(fh *multipart.FileHeader, path string) error {
+	f, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if ff, ok := f.(*os.File); ok { // 直实文件，直接重命名并移到指定路径
+		return os.Rename(ff.Name(), path)
+	}
+
+	ff, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer ff.Close()
+	_, err = copyZeroAlloc(ff, f)
+	return err
+}
+
+// 按key，在Query、post、put中查找值
+// 包含该值的细化方法:
+// * QueryArgs - query string
+// * PostArgs - POST/PUT body
+// * MultipartForm - multipart form
+// * FormFile - uploaded file
+func (ctx *RequestCtx) FormValue(key string) []byte {
+	v := ctx.QueryArgs().Peek(key)
+	if len(v) > 0 {
+		return v
+	}
+	v = ctx.PostArgs().Peek(key)
+	if len(v) > 0 {
+		return v
+	}
+	mf, err := ctx.MultipartForm()
+	if err == nil && mf.Value != nil {
+		vv := mf.Value[key] // map[string][]string
+		if len(vv) > 0 {
+			return []byte(vv[0])
+		}
+	}
+	return nil
+}
+
+func (ctx *RequestCtx) IsGet() bool {
+	return ctx.Request.Header.IsGet()
+}
+func (ctx *RequestCtx) IsPost() bool {
+	return ctx.Request.Header.IsPost()
+}
+func (ctx *RequestCtx) IsPut() bool {
+	return ctx.Request.Header.IsPut()
+}
+func (ctx *RequestCtx) IsDelete() bool {
+	return ctx.Request.Header.IsDelete()
+}
+
+func (ctx *RequestCtx) Method() []byte {
+	return ctx.Request.Header.Method()
+}
+
+func (ctx *RequestCtx) IsHead() bool {
+	return ctx.Request.Header.IsHead()
 }
 
 func (ctx *RequestCtx) RemoteAddr() net.Addr {
@@ -230,7 +414,7 @@ func addrToIP(addr net.Addr) net.IP {
 // Error设置响应错误码、信息
 func (ctx *RequestCtx) Error(msg string, statusCode int) {
 	ctx.Response.Reset()
-	ctx.Response.SetStatusCode(statusCode)
+	ctx.SetStatusCode(statusCode)
 	ctx.SetContentTypeBytes(defaultContentType)
 	ctx.SetBodyString(msg)
 }
@@ -261,6 +445,14 @@ func (ctx *RequestCtx) Redirect(uri string, statusCode int) {
 	ReleaseURI(u)
 }
 
+// RedirectBytes 返回'Location: uri'头和状态码
+// 状态码:
+//    301 被请求的资源已永久移动到新位置
+//    302 请求的资源现在临时从不同的 URI 响应请求
+//    303 对应当前请求的响应可以在另一个 URI 上被找到，而且客户端应当采用 GET 的方式访问那个资源。
+//    307 请求的资源现在临时从不同的URI 响应请求。
+//  其它状态码，将转为302
+// 跳转uri有可能与现uri是相对或绝对关系
 func (ctx *RequestCtx) RedirectBytes(uri []byte, statusCode int) {
 	s := b2s(uri)
 	ctx.Redirect(s, statusCode)
@@ -309,7 +501,7 @@ func (ctx *RequestCtx) SendFile(path string) {
 //   是ServeFileBytes(ctx, path)的快捷方式
 // 参考: ServeFileBytes, FSHandler, FS
 func (ctx *RequestCtx) SendFileBytes(path []byte) {
-	ServeFileBytes(path)
+	ServeFileBytes(ctx, path)
 }
 
 // 检测客户端缓存文件，与服务端该文件的最后修改时间，相应处理
@@ -333,4 +525,90 @@ func (ctx *RequestCtx) IfModifiedSince(lastModified time.Time) bool {
 func (ctx *RequestCtx) NotModified() {
 	ctx.Response.Reset()
 	ctx.SetStatusCode(StatusNotModified)
+}
+
+// 404响应
+func (ctx *RequestCtx) NotFound() {
+	ctx.Response.Reset()
+	ctx.SetStatusCode(StatusNotFound)
+	ctx.SetBodyString("404 Page not found")
+}
+
+func (ctx *RequestCtx) Write(p []byte) (int, error) {
+	ctx.Response.AppendBody(p)
+	return len(p), nil
+}
+
+func (ctx *RequestCtx) WriteString(s string) (int, error) {
+	ctx.Response.AppendBodyString(s)
+	return len(s), nil
+}
+
+// 在RequestHandler返回前有效
+func (ctx *RequestCtx) PostBody() []byte {
+	return ctx.Request.Body()
+}
+
+// 触发关闭:Body,BodyWriteTo,AppendBodyString,SetBodyStream,ResetBody,ReleaseBody,SwapBody,writeBodyStream
+// * bodySize>=0，则bodyStream需提供相应字节
+// * bodySize<0，则读取直到io.EOF
+// ps: GET,HEAD没有body
+func (ctx *RequestCtx) SetBodyStream(bodyStream io.Reader, bodySize int) {
+	ctx.Response.SetBodyStream(bodyStream, bodySize)
+}
+
+// 情景:
+// * body太大，超过10M
+// * body是从外部慢源取流数据
+// * body需要分片的 - `http client push` `chunked transfer-encoding`
+func (ctx *RequestCtx) SetBodyStreamWriter(sw StreamWriter) {
+	ctx.Response.SetBodyStreamWriter(sw)
+}
+
+func (ctx *RequestCtx) IsBodyStream() bool {
+	return ctx.Response.IsBodyStream()
+}
+
+// logger用于在RequestHandler记录 请求的任意信息
+// 所有记录的信息包含:request id, request duration, local address, remote address,
+// request method and request url
+// 可重复利用返回的logger来记录当次请求信息
+// 在RequestHandler返回前有效
+func (ctx *RequestCtx) Logger() Logger {
+	if ctx.logger.ctx == nil {
+		ctx.logger.ctx = ctx
+	}
+	if ctx.logger.logger == nil {
+		ctx.logger.logger = ctx.s.logger() //ctx.Server.Logger
+	}
+	return &ctx.logger
+}
+
+// 设置超时响应码和响应内容
+// 所有在该方法之后的响应变更，都被忽略 todo??
+// 若在其它协程中，有涉及到ctx的成员，TimeoutError须在RequestHandler返回前调用
+// 不鼓励使用该方法,最好直接在挂起的协程中，消除对ctx的引用 todo??
+func (ctx *RequestCtx) TimeoutError(msg string) {
+	ctx.TimeoutErrorWithCode(msg, StatusRequestTimeout)
+}
+
+// 设置超时响应码和响应内容
+// 所有在该方法之后的响应变更，都被忽略
+// 若在其它协程中，有涉及到ctx的成员，TimeoutErrorWithCode须在RequestHandler返回前调用
+// 不鼓励使用该方法,最好直接在挂起的协程中，消除对ctx的引用
+func (ctx *RequestCtx) TimeoutErrorWithCode(msg string, statusCode int) {
+	var resp Response
+	resp.SetStatusCode(statusCode)
+	resp.SetBodyString(msg)
+	ctx.TimeoutErrorWithResponse(&resp)
+}
+
+// 将ctx标记为超时,发送给定的响应
+// 所有在该方法之后的响应变更，都被忽略
+// 若在其它协程中，有涉及到ctx的成员，TimeoutErrorWithResponse须在RequestHandler返回前调用
+// 不鼓励使用该方法,最好直接在挂起的协程中，消除对ctx的引用
+func (ctx *RequestCtx) TimeoutErrorWithResponse(resp *Response) {
+	respCopy := &Response{}
+	resp.CopyTo(respCopy)
+	ctx.timeoutResponse = respCopy
 }
