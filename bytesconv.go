@@ -1,9 +1,12 @@
 package selfFastHttp
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"math"
 	"reflect"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -162,7 +165,74 @@ func ParseUfloat(buf []byte) (float64, error) {
 	return float64(v) / offset, nil //精确性-0.00123 == 0.0012300000000000002
 }
 
-// 将字符的十六进制转为十进制,其它字符保留原值
+var (
+	errEmptyHexNum    = errors.New("empty hex number")
+	errTooLargeHexNum = errors.New("too large hex number")
+)
+
+func readHexInt(r *bufio.Reader) (int, error) {
+	n := 0
+	i := 0
+	var k int
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				return n, nil
+			}
+			return -1, err
+		}
+		k = int(hex2intTable[c])
+		if k == 16 {
+			if i == 0 {
+				return -1, errEmptyHexNum
+			}
+			r.UnreadByte()
+			return n, nil
+		}
+		if i >= maxHexIntChars {
+			return -1, errTooLargeHexNum
+		}
+		n = (n << 4) | k
+		i++
+	}
+}
+
+var hexIntBufPool sync.Pool
+
+// 将int转成hex写入w
+func writeHexInt(w *bufio.Writer, n int) error {
+	if n < 0 {
+		panic("BUG: int must be positive")
+	}
+
+	v := hexIntBufPool.Get()
+	if v == nil {
+		v = make([]byte, maxHexIntChars+1)
+	}
+	buf := v.([]byte)
+	i := len(buf) - 1
+	for {
+		buf[i] = int2hexbyte(n & 0xf)
+		n >>= 4
+		if n == 0 {
+			break
+		}
+		i--
+	}
+	_, err := w.Write(buf[i:])
+	hexIntBufPool.Put(v)
+	return err
+}
+
+var int2hexbyte = func(n int) byte {
+	if n < 10 {
+		return '0' + byte(n)
+	}
+	return 'a' + byte(n) - 10
+}
+
+// 将字符的十六进制转为十进制,其它字符为16
 var hex2intTable = func() []byte {
 	b := make([]byte, 256)
 	for i := 0; i < 256; i++ {

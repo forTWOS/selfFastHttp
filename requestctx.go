@@ -230,7 +230,7 @@ func addrToIP(addr net.Addr) net.IP {
 // Error设置响应错误码、信息
 func (ctx *RequestCtx) Error(msg string, statusCode int) {
 	ctx.Response.Reset()
-	ctx.SetStatusCode(statusCode)
+	ctx.Response.SetStatusCode(statusCode)
 	ctx.SetContentTypeBytes(defaultContentType)
 	ctx.SetBodyString(msg)
 }
