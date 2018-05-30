@@ -33,6 +33,7 @@ var (
 	strPost   = []byte("POST")
 	strPut    = []byte("PUT")
 	strDelete = []byte("DELETE")
+	//strOptions = []byte("OPTIONS")
 
 	// i.e. 'xx: gzip'
 	strExpect           = []byte("Expect") // 'Expect: 100-continue'，遇到不支持HTTP/1.1的代理或服务器，会返回417错误

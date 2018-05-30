@@ -79,18 +79,9 @@ func (u *URI) CopyTo(dst *URI) {
 
 	//	dst.fullURI = append(dst.fullURI[:0], u.fullURI...)
 	//	dst.requestURI = append(dst.requestURI[:0], u.requestURI...)
-
-	// todo??
-	if u.h != nil {
-		if dst.h == nil {
-			dst.h = &RequestHeader{}
-		}
-		u.h.CopyTo(dst.h)
-	} else {
-		if dst.h != nil {
-			dst.h.Reset()
-		}
-	}
+	// 这个uri，用于处理头部URI，与其引用的Header为一套；耦合较深
+	// todo??等全局时，再回头来确认该功能
+	dst.h = u.h
 }
 
 // ----------------------------------
@@ -114,10 +105,12 @@ func (u *URI) QueryString() []byte {
 
 func (u *URI) SetQueryString(queryString string) {
 	u.queryString = append(u.queryString[:0], queryString...)
+	u.parsedQueryArgs = false
 }
 
 func (u *URI) SetQueryStringBytes(queryString []byte) {
 	u.queryString = append(u.queryString[:0], queryString...)
+	u.parsedQueryArgs = false
 }
 
 // i.e. /foo/bar of http://xxx.com/foo/bar?baz=123&bap=456#qwe
@@ -131,11 +124,13 @@ func (u *URI) Path() []byte {
 }
 
 func (u *URI) SetPath(path string) {
-	u.path = append(u.path[:0], path...)
+	u.pathOriginal = append(u.pathOriginal[:0], path...)
+	u.path = normalizePath(u.path, u.pathOriginal)
 }
 
 func (u *URI) SetPathBytes(path []byte) {
-	u.path = append(u.path[:0], path...)
+	u.pathOriginal = append(u.pathOriginal[:0], path...)
+	u.path = normalizePath(u.path, u.pathOriginal)
 }
 
 // 返回path原始值
@@ -164,9 +159,10 @@ func (u *URI) SetSchemeBytes(scheme []byte) {
 
 // i.e xxx.com of http://xxx.com/foo/bar?baz=123&bap=456#qwe
 // 返回值：最小化
+// 从RequestHeader中，取得host数据
 func (u *URI) Host() []byte {
 	if len(u.host) == 0 && u.h != nil {
-		u.host = append(u.host[:0], u.h.HOST()...)
+		u.host = append(u.host[:0], u.h.Host()...)
 		lowercaseBytes(u.host)
 		u.h = nil // todo??
 	}
@@ -192,13 +188,18 @@ func (u *URI) Parse(host, uri []byte) {
 	u.parse(host, uri, nil)
 }
 
-func (u *URI) ParseQuick(uri []byte, h *RequestHeader, isTLS bool) {
+func (u *URI) parseQuick(uri []byte, h *RequestHeader, isTLS bool) {
 	u.parse(nil, uri, h)
 	if isTLS {
 		u.scheme = append(u.scheme[:0], strHTTPS...)
 	}
 }
 
+// 初化化
+// host可nil,当此时,uri中包含完整信息
+// 当host不为空,uri可仅包含RequestURI
+// .i.e. host: http://xxx.com
+// .i.e. uri: /foo/bar?baz=123&bap=456#qwe
 func (u *URI) parse(host, uri []byte, h *RequestHeader) {
 	u.Reset()
 	u.h = h //todo?? new and CopyTo
@@ -251,6 +252,7 @@ func (u *URI) parse(host, uri []byte, h *RequestHeader) {
 	u.fragment = append(u.fragment, b[fragmentIndex+1:]...)
 }
 
+// +优化
 // 简单解析uri-it's useful for http/https
 // 从传入的host,uri 初始化 scheme(默认http), host, uri
 // 1.在uri中查找'://'--确认host,scheme
@@ -342,8 +344,8 @@ func normalizePath(dst, src []byte) []byte {
 		if n < 0 {
 			break
 		}
-		nn := bytes.LastIndexByte(b, '/')
-		if nn < 0 {
+		nn := bytes.LastIndexByte(b[:n], '/') // 找到前一个'/'
+		if nn < 0 {// 未找到，表示根目录
 			nn = 0
 		}
 		n += len(strSlashDotDotSlash) - 1 //防止不同编码异常
@@ -352,9 +354,9 @@ func normalizePath(dst, src []byte) []byte {
 	}
 
 	// 6.移除尾部'/foo/..'
-	n := bytes.Index(b, strSlashDotDot)
+	n := bytes.LastIndex(b, strSlashDotDot)
 	if n >= 0 && n+len(strSlashDotDot) == len(b) {
-		nn := bytes.LastIndexByte(b, '/')
+		nn := bytes.LastIndexByte(b[:n], '/')
 		if nn < 0 {
 			return strSlash
 		}
@@ -422,7 +424,7 @@ func (u *URI) updateBytes(newURI, buf []byte) []byte {
 	if n >= 0 {
 		//取出原scheme，若有值，而传入newURI不含scheme，则用之
 		var b [32]byte
-		schemeOriginal := buf[:0]
+		schemeOriginal := b[:0]
 		if len(u.scheme) > 0 {
 			schemeOriginal = append([]byte(nil), u.scheme...) //新建并复制一份scheme
 		}

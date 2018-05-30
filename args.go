@@ -254,7 +254,7 @@ type argsScanner struct {
 
 // todo html传数组的支持-[]解析
 // 1.空值处理
-// 2.用=&判定键值界限
+// 2.用=、&判定键值界限
 func (s *argsScanner) next(kv *argsKV) bool {
 	if len(s.b) == 0 {
 		return false
