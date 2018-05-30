@@ -18,14 +18,14 @@ type workerPool struct {
 
 	LogAllErrors bool // 是否记录所有错误
 
-	MaxIdleWorkerDuration time.Duration // 最大闲置时间
+	MaxIdleWorkerDuration time.Duration // 最大闲置时间,未设置，则为1微秒
 
 	Logger Logger
 
 	//private ---------
 	lock         sync.Mutex
 	workersCount int
-	isMustStop   bool
+	mustStop     bool
 
 	ready []*workerChan //闲置chan池,FILO
 
@@ -40,21 +40,14 @@ type workerChan struct {
 	ch          chan net.Conn
 }
 
-func (wp *workerPool) getMaxIdleWorkerDuration() time.Duration {
-	if wp.MaxIdleWorkerDuration <= 0 {
-		return 10 * time.Second
-	}
-	return wp.MaxIdleWorkerDuration
-}
-
 //开始运行
 //启用协程，定时处理闲置chan
 func (wp *workerPool) Start() {
 	if wp.stopCh != nil {
-		panic("Bug: workerPool already started")
+		panic("BUG: workerPool already started")
 	}
-	if wp.ServeFunc == nil {
-		panic("Bug: workerPool.ServeFunc not inited")
+	if wp.ServeFunc == nil { // +优化
+		panic("BUG: workerPool.ServeFunc not inited")
 	}
 	wp.stopCh = make(chan struct{})
 	stopCh := wp.stopCh
@@ -76,42 +69,11 @@ func (wp *workerPool) Start() {
 	}()
 }
 
-//清理闲置chan
-func (wp *workerPool) clean(scratch *[]*workerChan) {
-	maxIdleWorkerDuration := wp.getMaxIdleWorkerDuration()
-
-	now := time.Now()
-
-	wp.lock.Lock()
-	ready := wp.ready
-	n := len(ready)
-	i := 0
-	for i < n && now.Sub(ready[i].lastUseTime) > maxIdleWorkerDuration {
-		i++
-	}
-	*scratch = append((*scratch)[:0], ready[:i]...)
-
-	if i > 0 {
-		m := copy(ready, ready[i:])
-		for i = m; i < n; i++ {
-			ready[i] = nil
-		}
-		wp.ready = ready[:m]
-	}
-	wp.lock.Unlock()
-
-	tmp := *scratch
-	for i, ch := range tmp {
-		ch.ch <- nil // 阻塞处理，业务耗时不可控
-		tmp[i] = nil
-	}
-}
-
 //1.添加停止标志
 //2.清理闲置chan
 func (wp *workerPool) Stop() {
 	if wp.stopCh == nil {
-		panic("Bug: workerPool wasn't started")
+		panic("BUG: workerPool wasn't started")
 	}
 	close(wp.stopCh) //触发select
 	wp.stopCh = nil
@@ -124,8 +86,46 @@ func (wp *workerPool) Stop() {
 		ready[i] = nil
 	}
 	wp.ready = ready[:0]
-	wp.isMustStop = true
+	wp.mustStop = true
 	wp.lock.Unlock()
+}
+
+func (wp *workerPool) getMaxIdleWorkerDuration() time.Duration {
+	if wp.MaxIdleWorkerDuration <= 0 {
+		return 1 * time.Millisecond
+	}
+	return wp.MaxIdleWorkerDuration
+}
+
+//清理闲置chan
+func (wp *workerPool) clean(scratch *[]*workerChan) {
+	maxIdleWorkerDuration := wp.getMaxIdleWorkerDuration()
+
+	currentTime := time.Now()
+
+	wp.lock.Lock()
+	ready := wp.ready
+	n := len(ready)
+	i := 0
+	for i < n && currentTime.Sub(ready[i].lastUseTime) > maxIdleWorkerDuration {
+		i++
+	}
+	*scratch = append((*scratch)[:0], ready[:i]...)
+	if i > 0 {
+		m := copy(ready, ready[i:])
+		for i = m; i < n; i++ {
+			ready[i] = nil
+		}
+		wp.ready = ready[:m]
+	}
+	wp.lock.Unlock()
+
+	// 通知旧workers停止
+	tmp := *scratch
+	for i, ch := range tmp {
+		ch.ch <- nil // 阻塞处理，业务耗时不可控
+		tmp[i] = nil
+	}
 }
 
 //对外服务
@@ -138,8 +138,8 @@ func (wp *workerPool) Serve(c net.Conn) bool {
 	return true
 }
 
-var workerChanGap = func() int {
-	//据说明：单核阻塞更好 go1.5
+var workerChanCap = func() int {
+	//据说明：单核阻塞性能更好 go1.5
 	if runtime.GOMAXPROCS(0) == 1 {
 		return 0
 	}
@@ -153,7 +153,7 @@ func (wp *workerPool) getCh() *workerChan {
 	createWorker := false
 
 	wp.lock.Lock()
-	if wp.isMustStop {
+	if wp.mustStop {
 		wp.lock.Unlock()
 		return nil
 	}
@@ -171,11 +171,14 @@ func (wp *workerPool) getCh() *workerChan {
 	}
 	wp.lock.Unlock()
 
-	if createWorker {
+	if ch == nil {
+		if !createWorker {
+			return nil //为了ch不放到堆上 todo??
+		}
 		vch := wp.workerChanPool.Get()
 		if vch == nil {
 			vch = &workerChan{
-				ch: make(chan net.Conn, workerChanGap),
+				ch: make(chan net.Conn, workerChanCap),
 			}
 		}
 		ch = vch.(*workerChan)
@@ -184,17 +187,16 @@ func (wp *workerPool) getCh() *workerChan {
 			wp.workerChanPool.Put(vch)
 		}()
 	}
-
 	return ch
 }
 
 func (wp *workerPool) release(ch *workerChan) bool {
+	ch.lastUseTime = time.Now() //CoarseTimeNow()
 	wp.lock.Lock()
-	if wp.isMustStop {
+	if wp.mustStop {
 		wp.lock.Unlock()
 		return false
 	}
-	ch.lastUseTime = time.Now() //CoarseTimeNow()
 	wp.ready = append(wp.ready, ch)
 	wp.lock.Unlock()
 	return true
@@ -218,7 +220,7 @@ func (wp *workerPool) workerFunc(ch *workerChan) {
 			}
 		}
 		if err != errHijacked {
-			c.Close() //todo close conn
+			c.Close()
 		}
 		c = nil
 
