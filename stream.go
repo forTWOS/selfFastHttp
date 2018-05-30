@@ -19,7 +19,7 @@ type StreamWriter func(w *bufio.Writer)
 // 这个reader有可能传到Response.SetBodyStream
 // 返回reader中，当所有请求的数据被读完，须调用Close；否则goroutine有可能泄漏
 func NewStreamReader(sw StreamWriter) io.ReadCloser {
-	pc := selffasthttputil.NewPipeConns() //子包 todo??
+	pc := selffasthttputil.NewPipeConns()
 	pw := pc.Conn1()
 	pr := pc.Conn2()
 
@@ -35,7 +35,7 @@ func NewStreamReader(sw StreamWriter) io.ReadCloser {
 	go func() {
 		sw(bw)
 		bw.Flush()
-		bw.Close()
+		pw.Close()
 
 		streamWriterBufPool.Put(bw)
 	}()
