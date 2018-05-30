@@ -279,7 +279,7 @@ func (resp *Response) BodyGunzip() ([]byte, error) {
 	return gunzipData(resp.Body())
 }
 func gunzipData(p []byte) ([]byte, error) {
-	var bb ByteBuffer
+	var bb bytebufferpool.ByteBuffer
 	_, err := WriteGunzip(&bb, p)
 	if err != nil {
 		return nil, err
@@ -296,7 +296,7 @@ func (resp *Response) BodyInflate() ([]byte, error) {
 	return inflateData(resp.Body())
 }
 func inflateData(p []byte) ([]byte, error) {
-	var bb ByteBuffer
+	var bb bytebufferpool.ByteBuffer
 	_, err := WriteInflate(&bb, p)
 	if err != nil {
 		return nil, err
@@ -594,7 +594,7 @@ func (req *Request) MultipartForm() (*multipart.Form, error) {
 
 // 将multipartForm按格式写入buf中
 func marshalMultipartForm(f *multipart.Form, boundary string) ([]byte, error) {
-	var buf ByteBuffer
+	var buf bytebufferpool.ByteBuffer
 	if err := WriteMultipartForm(&buf, f, boundary); err != nil {
 		return nil, err
 	}
@@ -1122,14 +1122,14 @@ type flushWriter struct {
 
 // 封装bufio的Write和Flush操作
 func (w *flushWriter) Write(p []byte) (int, error) {
-	n, err := w.wf.Write(p)
+	n, err := w.wf.Write(p) //数据写入接口-封将glib等算法
 	if err != nil {
 		return 0, err
 	}
-	if err = w.wf.Flush(); err != nil {
+	if err = w.wf.Flush(); err != nil { //刷入sw中
 		return 0, err
 	}
-	if err = w.bw.Flush(); err != nil {
+	if err = w.bw.Flush(); err != nil { // sw刷入其双向接口的写管道中
 		return 0, err
 	}
 	return n, nil
