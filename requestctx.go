@@ -47,11 +47,37 @@ type RequestCtx struct {
 	c      net.Conn
 	fbr    firstByteReader //特定条件使用的读取器
 
-	timeoutResponse *Response   //超时标志器-用于超时后相关处理
-	timeoutCh       chan struct{}    //超时管道,在等待处理结束时，定时
-	timeoutTimer    *time.Timer //超时定时器，与timeoutCh合用，最后调用TimeoutError设置timeoutResponse
+	timeoutResponse *Response     //超时标志器-用于超时后相关处理
+	timeoutCh       chan struct{} //超时管道,在等待处理结束时，定时
+	timeoutTimer    *time.Timer   //超时定时器，与timeoutCh合用，最后调用TimeoutError设置timeoutResponse
 
 	hijackHandler HijackHandler
+}
+
+// todo??
+func (ctx *RequestCtx) Reset() { // +优化
+	ctx.Request.Reset()
+	ctx.Response.Reset()
+	ctx.userValues.Reset()
+
+	ctx.lastReadDuration = 0
+	ctx.connID = 0
+	ctx.connRequestNum = 0
+	ctx.connTime = zeroTime
+
+	ctx.time = zeroTime
+	//	ctx.logger
+	ctx.s = nil
+	ctx.c.Close()
+	ctx.c = nil
+	ctx.fbr.c.Close()
+	ctx.fbr.c = nil
+
+	ctx.timeoutResponse = nil
+	ctx.timeoutCh = nil
+	ctx.timeoutTimer = nil
+
+	ctx.hijackHandler = nil
 }
 
 //===================================
