@@ -2,12 +2,88 @@
 package selfFastHttp
 
 import (
-	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// 为传入的c，提供http服务
+// 服务操作
+// 请求成功，返回nil,否则返回error
+// c须立即将响应数据传到Write中，否则请求处理，会卡住
+// c会在返回前Close
+func ServeConn(c net.Conn, handler RequestHandler) error {
+	v := serverPool.Get()
+	if v == nil {
+		v = &Server{}
+	}
+	s := v.(*Server)
+	s.Handler = handler
+	err := s.ServeConn(c)
+	s.Handler = nil
+	serverPool.Put(v)
+	return err
+}
+
+var serverPool sync.Pool
+
+// 为ln的连接，提供http服务
+// Serve阻塞，直到ln返回错误
+func Serve(ln net.Listener, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.Serve(ln)
+}
+
+// 为ln的连接，提供https服务
+// Serve阻塞，直到ln返回错误
+func ServeTLS(ln net.Listener, certFile, keyFile string, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ServeTLS(ln, certFile, keyFile)
+}
+
+// 为ln的连接，提供https服务
+// Serve阻塞，直到ln返回错误
+func ServeTLSEmbed(ln net.Listener, certData, keyData []byte, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ServeTLSEmbed(ln, certData, keyData)
+}
+
+// 监听addr，提供http服务
+func ListenAndServe(addr string, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ListenAndServe(addr)
+}
+
+// 监听addr，提供http服务
+func ListenAndServeUNIX(addr string, mode os.FileMode, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ListenAndServeUNIX(addr, mode)
+}
+
+func ListenAndServeTLS(addr , certFile, keyFile string, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ListenAndServeTLS(addr, certFile, keyFile)
+}
+func ListenAndServeTLSEmbed(addr string, certData, keyData []byte, handler RequestHandler) error {
+	s := &Server{
+		Handler: handler,
+	}
+	return s.ListenAndServeTLSEmbed(addr, certData, keyData)
+}
 
 // 请求处理接口
 // RequestHandler必须能处理请求
@@ -18,11 +94,14 @@ type RequestHandler func(ctx *RequestCtx)
 type Server struct {
 	noCopy noCopy
 
-	Handler RequestHandler //外部处理接口
+ 	//外部处理接口
+	Handler RequestHandler
 
-	Name string // 服务器名,如果未设置，使用defaultServerName
+	 // 服务器名,如果未设置，使用defaultServerName
+	Name string
 
-	Concurrency int //一个server的并发数
+	//一个server的并发数
+	Concurrency int 
 
 	// 是否不使用长连接
 	//
@@ -103,7 +182,7 @@ type Server struct {
 	Logger Logger
 
 	concurrency      uint32           //当前并发数，有请求时，与Concurrency比对
-	concurrencyCh    []chan struct{}  //限制并发数手段:能写入struct{}{}时，表示获得1个服务数,使用完取出下标志
+	concurrencyCh    chan struct{}    //限制并发数手段:能写入struct{}{}时，表示获得1个服务数,使用完取出下标志
 	perIPConnCounter perIPConnCounter //每个ip的连接计数器
 	serverName       atomic.Value     //实际使用的服务器名 响应时，填入
 
@@ -114,43 +193,66 @@ type Server struct {
 	bytePool       sync.Pool //字节分片池-用于读字节
 }
 
-//取得最大并发数
-func (s *Server) getConcurrency() int {
-	n := s.Concurrency
-	if n <= 0 {
-		n = DefaultConcurrency
+// 生成定时请求处理器-当h处理超时时，将StatusRequestTimeout发给客户端
+// 生成的处理器，在并发满载时，会响应StatusTooManyRequests
+func TimeoutHandler(h RequestHandler, timeout time.Duration, msg string) RequestHandler {
+	if timeout <= 0 {
+		return h
 	}
-	return n
-}
 
-func (s *Server) writeFastError(w io.Writer, statusCode int, msg string) {
-
-}
-
-func acceptConn(s *Server, ln net.Listener, lastPerIPErrorTime *time.Time) (net.Conn, error) {
-	return nil, nil
-}
-
-//取日志imp
-func (s *Server) logger() Logger {
-	if s.Logger != nil {
-		return s.Logger
-	}
-	return defaultLogger
-}
-
-//取服务器名
-func (s *Server) getServerName() []byte {
-	v := s.serverName.Load()
-	var serverName []byte
-	if v == nil {
-		serverName = []byte(s.Name)
-		if len(serverName) == 0 {
-			serverName = defaultServerName
+	return func(ctx *RequestCtx) {
+		concurrencyCh := ctx.s.concurrencyCh
+		select {
+		case concurrencyCh <- struct{}{}: //请求一个并发处理
+		default:
+			ctx.Error(msg, StatusTooManyRequests)
+			return
 		}
-		s.serverName.Store(serverName)
-	} else {
-		serverName = v.([]byte)
+
+		ch := ctx.timeoutCh
+		if ch == nil {
+			ch = make(chan struct{}, 1)
+			ctx.timeoutCh = ch
+		}
+		go func() {
+			h(ctx)
+			ch <- struct{}{}
+			<-concurrencyCh //还回并发处理
+		}()
+		ctx.timeoutTimer = initTimer(ctx.timeoutTimer, timeout)
+		select {
+		case <-ch: //处理完成
+		case <-ctx.timeoutTimer.C: //超时处理
+			ctx.TimeoutError(msg)
+		}
+		stopTimer(ctx.timeoutTimer) //关闭定时器
 	}
-	return serverName
+}
+
+// 有'gzip' or 'deflate' 'Accept-Encoding'头时，将压缩h生成的响应内容
+func CompressHandler(h RequestHandler) RequestHandler {
+	return CompressHandlerLevel(h, CompressDefaultCompression)
+}
+
+//'gzip' or 'deflate' 'Accept-Encoding'头
+//  level:
+//     * CompressNoCompression
+//     * CompressBestSpeed
+//     * CompressBestCompression
+//     * CompressDefaultCompression
+//     * CompressHuffmanOnly
+func CompressHandlerLevel(h RequestHandler, level int) RequestHandler {
+	return func(ctx *RequestCtx) {
+		h(ctx)
+		ce := ctx.Response.Header.PeekBytes(strContentEncoding)
+		if len(ce) > 0 {
+			//已设置压缩头，不重复处理
+			return
+		}
+		if ctx.Request.Header.HasAcceptEncodingBytes(strGzip) {
+			ctx.Response.gzipBody(level)
+		} else if ctx.Request.Header.HasAcceptEncodingBytes(strDeflate) {
+			ctx.Response.deflateBody(level)
+		}
+	}
 }
