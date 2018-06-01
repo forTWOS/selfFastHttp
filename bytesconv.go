@@ -19,6 +19,10 @@ func AppendHTTPDate(dst []byte, date time.Time) []byte {
 	return dst
 }
 
+func ParseHTTPDate(date []byte) (time.Time, error) {
+	return time.Parse(time.RFC1123, b2s(date))
+}
+
 // 将int转成[]byte-int:最大20位
 // 循环判断传入值:
 //    1.>=10 将个位数转成ascii码，存入临时缓存buf中

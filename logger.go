@@ -4,16 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
-	"os"
 	"time"
 )
 
-type Logger interface {
-	Printf(format string, args ...interface{})
-}
+//type Logger interface {
+//	Printf(format string, args ...interface{})
+//}
 
-var defaultLogger = Logger(log.New(os.Stderr, "", log.LstdFlags))
+//var defaultLogger = Logger(log.New(os.Stderr, "", log.LstdFlags))
 
 //自仿写Logger
 type selfLogger struct {
