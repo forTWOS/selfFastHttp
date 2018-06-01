@@ -417,7 +417,6 @@ func peekArgBytes(h []argsKV, k []byte) []byte {
 // *直接返回引用
 // todo 使用peekArgBytes or this
 func peekArgStr(h []argsKV, k string) []byte {
-	k_tmp := s2b(k)
 	for i, n := 0, len(h); i < n; i++ {
 		kv := &h[i]
 		if string(kv.key) == k {
