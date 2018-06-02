@@ -66,11 +66,9 @@ func (ctx *RequestCtx) Reset() { // +优化
 	ctx.connTime = zeroTime
 
 	ctx.time = zeroTime
-	//	ctx.logger
+	ctx.logger.Reset()
 	ctx.s = nil
-	ctx.c.Close()
 	ctx.c = nil
-	ctx.fbr.c.Close()
 	ctx.fbr.c = nil
 
 	ctx.timeoutResponse = nil
@@ -215,6 +213,10 @@ func (cl *ctxLogger) Printf(format string, args ...interface{}) {
 	ctx := cl.ctx
 	cl.logger.Printf("%.3f %s - %s", time.Since(ctx.Time()).Seconds(), ctx.String(), msg)
 	ctxLoggerLock.Unlock()
+}
+func (cl *ctxLogger) Reset() {
+	cl.ctx = nil
+	cl.logger = nil
 }
 
 //===================================

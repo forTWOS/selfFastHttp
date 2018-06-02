@@ -40,6 +40,10 @@ type workerChan struct {
 	ch          chan net.Conn
 }
 
+//func (wp *workerPool) GetWorkersCount() int {
+//	return wp.workersCount
+//}
+
 //开始运行
 //启用协程，定时处理闲置chan
 func (wp *workerPool) Start() {
@@ -64,6 +68,15 @@ func (wp *workerPool) Start() {
 				return
 			default:
 				time.Sleep(wp.getMaxIdleWorkerDuration())
+			}
+		}
+	}()
+	go func() {
+		t := time.NewTicker(time.Second)
+		for {
+			select {
+			case <-t.C:
+				wp.Logger.Printf("workersCount:%d", wp.workersCount)
 			}
 		}
 	}()

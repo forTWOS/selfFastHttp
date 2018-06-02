@@ -171,6 +171,7 @@ func acceptConn(s *Server, ln net.Listener, lastPerIPErrorTime *time.Time) (net.
 			}
 			c = pic
 		}
+		//		s.logger().Printf("[Accept] new conn:%d", c)
 		return c, nil
 	}
 }
@@ -208,6 +209,9 @@ var (
 )
 
 // 处理c请求:前置检测-maxConnPerIP,concurrency
+// 请求成功，返回nil,否则返回error
+// c须立即将响应数据传到Write中，否则请求处理，会卡住
+// c会在返回前Close
 func (s *Server) ServeConn(c net.Conn) error {
 	if s.MaxConnsPerIP > 0 {
 		pic := wrapPerIPConn(s, c)
@@ -263,10 +267,8 @@ func nextConnID() uint64 {
 // See Server.MaxRequestBodySize for details.
 const DefaultMaxRequestBodySize = 4 * 1024 * 1024 // 4M
 
-// 服务操作
-// 请求成功，返回nil,否则返回error
-// c须立即将响应数据传到Write中，否则请求处理，会卡住
-// c会在返回前Close
+// 具体http服务处理
+// 没有引用c即可
 func (s *Server) serveConn(c net.Conn) error {
 	serverName := s.getServerName()
 	connRequestNum := uint64(0)
@@ -295,9 +297,15 @@ func (s *Server) serveConn(c net.Conn) error {
 		connectionClose bool
 		isHTTP11        bool
 	)
+	//	s.logger().Printf("[Server] serveConn:%d c:%d", connID, c)
+	// 工作原理:
+	// 针对一个c，循环读
+	// * 读到内容，相应处理;然后循环中，再次阻塞在读
+	// * 未读到，一直阻塞
 	for {
 		connRequestNum++
 		ctx.time = currentTime
+		//		ctx.Logger().Printf("connRequestNum:%d", connRequestNum)
 
 		if s.ReadTimeout > 0 || s.MaxKeepaliveDuration > 0 {
 			lastReadDeadlineTime = s.updateReadDeadline(c, ctx, lastReadDeadlineTime) // 更新读超时
@@ -307,26 +315,31 @@ func (s *Server) serveConn(c net.Conn) error {
 			}
 		}
 
-		// todo??
-		// 读取器初始化：非‘最小内存模式’ 读取间隔<=1秒
+		// 读取器初始化：非‘最小内存模式’ 读取间隔<=1秒(在同连接上的后1请求)
+		// 确认为该连接第2之后请求，使用首字节探测器-阻塞等待后续请求
 		if !(s.ReduceMemoryUsage || ctx.lastReadDuration > time.Second) || br != nil {
+			//			ctx.Logger().Printf("acquireReader")
 			if br == nil {
 				br = acquireReader(ctx)
 			}
-		} else { // 最小内存模式 || 读取间隔> 1秒
+		} else { // 最小内存模式 || 读取间隔> 1秒 -- 使用首字节探测器-阻塞等待后续请求
+			//			ctx.Logger().Printf("acquireByteReader")
 			br, err = acquireByteReader(&ctx)
+			//			ctx.Logger().Printf("acquireByteReader over c:%x", ctx.c)
 		}
 		ctx.Request.isTLS = isTLS
 
-		if err == nil {
+		//		ctx.Logger().Printf("start:%q", ctx.time.String())
+		if err == nil { //阻塞-等待请求
 			// 头处理
 			if s.DisableHeaderNamesNormalizing {
 				ctx.Request.Header.DisableNormalizing()
 				ctx.Response.Header.DisableNormalizing()
 			}
 			// 读取body
-			err = ctx.Request.readLimitBody(br, maxRequestBodySize, s.GetOnly)
-			if br.Buffered() == 0 || err != nil { // 未读取到内容 出错(停止当前连接处理)
+			err = ctx.Request.readLimitBody(br, maxRequestBodySize, s.GetPostOnly)
+			if br.Buffered() == 0 || err != nil { // 读取完成/出错(停止当前连接处理)
+				//				ctx.Logger().Printf("releaseReader")
 				releaseReader(s, br)
 				br = nil
 			}
@@ -334,6 +347,7 @@ func (s *Server) serveConn(c net.Conn) error {
 
 		currentTime = time.Now()
 		ctx.lastReadDuration = currentTime.Sub(ctx.time) // 读取所花时间
+		//		ctx.Logger().Printf("stop:%q", currentTime.String())
 
 		if err != nil { // 申请读取器出错 || 首次读取出错
 			if err == io.EOF { // 读取到末尾，请求结束
@@ -441,8 +455,9 @@ func (s *Server) serveConn(c net.Conn) error {
 			break
 		}
 
-		// 读取器为空(读到空数据/读取出错) 或 短连接
+		// 读取器为空(读取完成/读取出错) 或 短连接
 		if br == nil || connectionClose {
+			//			ctx.Logger().Printf("bw.size:%d, %d, %d", bw.Size(), bw.Available(), bw.Buffered())
 			err = bw.Flush()
 			releaseWriter(s, bw)
 			bw = nil
@@ -455,7 +470,7 @@ func (s *Server) serveConn(c net.Conn) error {
 		}
 
 		// 劫持处理-处理完退出
-		if hijackHandler != nil {
+		if hijackHandler != nil { // todo??
 			var hjr io.Reader
 			hjr = c
 			if br != nil {
@@ -492,6 +507,8 @@ func (s *Server) serveConn(c net.Conn) error {
 		releaseWriter(s, bw)
 	}
 	s.releaseCtx(ctx) // 释放ctx
+
+	//	s.logger().Printf("[Server] serveConn over:%d c:%d", connID, c)
 	return err
 }
 
@@ -611,17 +628,17 @@ func writeResponse(ctx *RequestCtx, w *bufio.Writer) error {
 }
 
 const (
-	defaultReadBufferSize  = 4096 //原生go的http，也是这个值，看需求，360服务器改为1k todo??
-	defaultWriteBufferSize = 4096
+	defaultReadBufferSize  = 1024 //原生go的http，也是这个值，看需求，360服务器改为1k todo??
+	defaultWriteBufferSize = 1024
 )
 
-// 按字节读取器
+// 首字节探测器
 func acquireByteReader(ctxP **RequestCtx) (*bufio.Reader, error) {
 	ctx := *ctxP
 	s := ctx.s
 	c := ctx.c
 	t := ctx.time
-	s.releaseCtx(ctx)
+	s.releaseCtx(ctx) // 仅需置空c
 
 	// 让gc回收资源
 	ctx = nil
@@ -632,17 +649,10 @@ func acquireByteReader(ctxP **RequestCtx) (*bufio.Reader, error) {
 		v = make([]byte, 1)
 	}
 	b := v.([]byte)
-	n, err := c.Read(b)
+	n, err := c.Read(b) // 监听首字节
 	ch := b[0]
 	s.bytePool.Put(v)
 	ctx = s.acquireCtx(c)
-
-	// +优化
-	ctx.Reset()
-	ctx.s = s
-	keepBodyBuffer := !s.ReduceMemoryUsage
-	ctx.Request.keepBodyBuffer = keepBodyBuffer
-	ctx.Response.keepBodyBuffer = keepBodyBuffer
 
 	ctx.time = t
 	*ctxP = ctx
@@ -677,13 +687,16 @@ func acquireReader(ctx *RequestCtx) *bufio.Reader {
 	return r
 }
 func releaseReader(s *Server, r *bufio.Reader) {
+	r.Reset(nil) // +优化
 	s.readerPool.Put(r)
 }
 
 // --- Writer pool 写缓冲器
 func acquireWriter(ctx *RequestCtx) *bufio.Writer {
+	//	ctx.Logger().Printf("acquireWriter:%x", ctx.c)
 	v := ctx.s.writerPool.Get()
 	if v == nil {
+		//		ctx.Logger().Printf("acquireWriter: v== nil")
 		n := ctx.s.WriteBufferSize
 		if n <= 0 {
 			n = defaultWriteBufferSize
@@ -692,14 +705,16 @@ func acquireWriter(ctx *RequestCtx) *bufio.Writer {
 	}
 	w := v.(*bufio.Writer)
 	w.Reset(ctx.c)
+	//	ctx.Logger().Printf("acquireWriter:%x, %+v, %x", ctx.c, w, GetAddr(w))
 	return w
 }
 
 func releaseWriter(s *Server, w *bufio.Writer) {
+	//	s.logger().Printf("releaseWriter:%+v, %x", w, GetAddr(w))
+	w.Reset(nil) // +优化
 	s.writerPool.Put(w)
 }
 
-// +优化 todo??
 func (s *Server) acquireCtx(c net.Conn) *RequestCtx {
 	v := s.ctxPool.Get()
 	var ctx *RequestCtx
@@ -712,7 +727,7 @@ func (s *Server) acquireCtx(c net.Conn) *RequestCtx {
 		ctx.Response.keepBodyBuffer = keepBodyBuffer
 	} else {
 		ctx = v.(*RequestCtx)
-		// +优化
+		// +优化 todo??
 		ctx.Reset()
 		ctx.s = s
 		keepBodyBuffer := !s.ReduceMemoryUsage
@@ -791,9 +806,7 @@ func (s *Server) releaseCtx(ctx *RequestCtx) {
 	if ctx.timeoutResponse != nil {
 		panic("BUG: cannot release timed out RequestCtx")
 	}
-	ctx.c.Close() // +优化
 	ctx.c = nil
-	ctx.fbr.c.Close() // +优化
 	ctx.fbr.c = nil
 	s.ctxPool.Put(ctx)
 }

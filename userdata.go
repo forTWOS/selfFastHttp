@@ -1,6 +1,7 @@
 package selfFastHttp
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -65,6 +66,7 @@ func (d *userData) Reset() {
 	for i := 0; i < n; i++ {
 		v := args[i].value
 		if vc, ok := v.(io.Closer); ok {
+			fmt.Println("userdata stop")
 			vc.Close()
 		}
 	}

@@ -713,6 +713,7 @@ func (req *Request) Read(r *bufio.Reader) error {
 const defaultMaxInMemoryFileSize = 16 * 1024 * 1024
 
 var errGetOnly = errors.New("non-GET request received")
+var errGetPostOnly = errors.New("non-GET/POST request received")
 
 // 按限定量，读取body数据
 // 当设置了maxBodySize >0,而实际body数据超过该值，返回ErrBodyTooLarge
@@ -727,15 +728,18 @@ func (req *Request) ReadLimitBody(r *bufio.Reader, maxBodySize int) error {
 	return req.readLimitBody(r, maxBodySize, false)
 }
 
-func (req *Request) readLimitBody(r *bufio.Reader, maxBodySize int, getOnly bool) error {
+func (req *Request) readLimitBody(r *bufio.Reader, maxBodySize int, getPostOnly bool) error {
 	// 不在此处reset请求，调用者需自己调用reset
 
 	err := req.Header.Read(r)
 	if err != nil {
 		return err
 	}
-	if getOnly && !req.Header.IsGet() {
+	/*if getOnly && !req.Header.IsGet() {
 		return errGetOnly
+	}*/
+	if getPostOnly && !req.Header.IsGet() && !req.Header.IsPost() {
+		return errGetPostOnly
 	}
 
 	if req.Header.noBody() { // HEAD GET方法

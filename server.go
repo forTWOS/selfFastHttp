@@ -72,7 +72,7 @@ func ListenAndServeUNIX(addr string, mode os.FileMode, handler RequestHandler) e
 	return s.ListenAndServeUNIX(addr, mode)
 }
 
-func ListenAndServeTLS(addr , certFile, keyFile string, handler RequestHandler) error {
+func ListenAndServeTLS(addr, certFile, keyFile string, handler RequestHandler) error {
 	s := &Server{
 		Handler: handler,
 	}
@@ -94,14 +94,14 @@ type RequestHandler func(ctx *RequestCtx)
 type Server struct {
 	noCopy noCopy
 
- 	//外部处理接口
+	//外部处理接口
 	Handler RequestHandler
 
-	 // 服务器名,如果未设置，使用defaultServerName
+	// 服务器名,如果未设置，使用defaultServerName
 	Name string
 
 	//一个server的并发数
-	Concurrency int 
+	Concurrency int
 
 	// 是否不使用长连接
 	//
@@ -165,7 +165,8 @@ type Server struct {
 	// 仅Get方式
 	// 用于防ddos攻击，请求大小受ReadBufferSize限制
 	// 默认允许所有方式 put delete get post head等
-	GetOnly bool
+	//	GetOnly     bool
+	GetPostOnly bool
 
 	// 在生产环境中，会记录频繁的错误"connection reset by peer", "broken pipe", "connection timeout"
 	// 默认不输出以上错误

@@ -11,6 +11,10 @@ import (
 	"unsafe"
 )
 
+func GetAddr(o interface{}) uintptr {
+	return uintptr(unsafe.Pointer(&o))
+}
+
 // HTTP-compliant (RFC1123) representation of date
 // windows amd64 BenchmarkAppendHTTPDate-8    	20000000	       101 ns/op
 func AppendHTTPDate(dst []byte, date time.Time) []byte {

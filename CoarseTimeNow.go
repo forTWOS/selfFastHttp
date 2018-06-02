@@ -55,16 +55,16 @@ var coarseTime atomic.Value
 
 //var gInit sync.Once
 func init() {
-	return // 不使用
+	// 不使用
 	//	gInit.Do(func() {
 	t := time.Now().Truncate(time.Second)
 	gTime = &t
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			//t := time.Now().Truncate(time.Second)
-			//pt := &t
-			//atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&gTime)), unsafe.Pointer(pt))
+			t := time.Now().Truncate(time.Second)
+			pt := &t
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&gTime)), unsafe.Pointer(pt))
 		}
 	}()
 	//	})
