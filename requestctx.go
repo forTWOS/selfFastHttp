@@ -54,8 +54,8 @@ type RequestCtx struct {
 	hijackHandler HijackHandler
 }
 
-// todo??
-func (ctx *RequestCtx) Reset() { // +优化
+// +优化
+func (ctx *RequestCtx) Reset() {
 	ctx.Request.Reset()
 	ctx.Response.Reset()
 	ctx.userValues.Reset()
@@ -95,6 +95,8 @@ type HijackHandler func(c net.Conn)
 // 该接口须不引用ctx成员
 // 任意的'Connection: Upgrade' 协议可能应用该接口,.e.g:
 //   * WebSocket
+//		'GET /ws HTTP/1.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-Websocket-Key: A3xNe7sEB9HixkmBhVrYaA==\r\nSec-Websocket-Version: 13'
+//		'HTTP/1.1 101 Switching Protocols\r\nConnection: UpgradeSec-Websocket-Accept: ksu0wXWG+YmkVx+KQR2agP0cQn4=\r\nUpgrade: websocket'
 //   * HTTP/2.0
 //
 func (ctx *RequestCtx) Hijack(handler HijackHandler) {
@@ -143,7 +145,7 @@ type connTLSer interface {
 
 // tls.Conn is an encrypted connection (aka SSL, HTTPS).
 func (ctx *RequestCtx) IsTLS() bool {
-	// 转换成connTLSer，而不是*tls.Conn，是因为有此情况，会覆盖tls.Conn,例如: todo??
+	// 转换成connTLSer接口，而不是*tls.Conn，是因为指针会修改到ctx.c内容
 	//
 	// type customConn struct {
 	//	    *tls.Conn
@@ -269,7 +271,7 @@ func (ctx *RequestCtx) SetContentTypeBytes(contentType []byte) {
 	ctx.Response.Header.SetContentTypeBytes(contentType)
 }
 
-// todo?? i.e. 仅URI部份，不含scheme,host
+// i.e. 仅URI部份，不含scheme,host
 func (ctx *RequestCtx) RequestURI() []byte {
 	return ctx.Request.Header.RequestURI()
 }
@@ -613,9 +615,9 @@ func (ctx *RequestCtx) Logger() Logger {
 }
 
 // 设置超时响应码和响应内容
-// 所有在该方法之后的响应变更，都被忽略 todo??
+// 所有在该方法之后的响应变更，都被忽略
 // 若在其它协程中，有涉及到ctx的成员，TimeoutError须在RequestHandler返回前调用
-// 不鼓励使用该方法,最好直接在挂起的协程中，消除对ctx的引用 todo??
+// 不鼓励使用该方法,最好直接在挂起的协程中，消除对ctx的引用
 func (ctx *RequestCtx) TimeoutError(msg string) {
 	ctx.TimeoutErrorWithCode(msg, StatusRequestTimeout)
 }

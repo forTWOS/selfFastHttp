@@ -840,7 +840,7 @@ func (h *ResponseHeader) SetCanonical(key, value []byte) {
 
 // --- SetCookie
 // - Resp
-// 返回后，保存重利用cookie todo??
+// 返回后，保存重利用cookie - 复制方式
 func (h *ResponseHeader) SetCookie(cookie *Cookie) {
 	h.cookies = setArgBytes(h.cookies, cookie.Key(), cookie.Cookie())
 }
@@ -854,6 +854,7 @@ func (h *RequestHeader) SetCookie(key, value string) {
 func (h *RequestHeader) SetCookieBytesK(key []byte, value string) {
 	h.SetCookie(b2s(key), value)
 }
+
 //func (h *RequestHeader) SetCookieBytesV(key string, value []byte) {
 //	h.SetCookie(key, b2s(value))
 //}
@@ -1195,7 +1196,7 @@ func isOnlyCRLF(b []byte) bool {
 
 //=================================
 // 每秒刷新serverDate
-func init() { // todo?? 开关控制
+func init() { // 开关控制
 	refreshServerDate()
 	go func() {
 		for {
@@ -1297,6 +1298,7 @@ func (h *RequestHeader) Write(w *bufio.Writer) error {
 	_, err := w.Write(h.Header())
 	return err
 }
+
 // WriteTo 实现 io.WriterTo 接口.
 func (h *RequestHeader) WriteTo(w io.Writer) (int64, error) {
 	n, err := w.Write(h.Header())
@@ -1621,7 +1623,8 @@ func (h *ResponseHeader) parseHeaders(buf []byte) (int, error) {
 	if h.contentLength < 0 {
 		h.contentLengthBytes = h.contentLengthBytes[:0]
 	}
-	// identity 若contentLength判定为-2，优先为inentity todo??
+	// identity
+	// 若contentLength判定为-2 && 有body && !Upgrade
 	if h.contentLength == -2 && !h.ConnectionUpgrade() && !h.mustSkipContentLength() {
 		h.h = setArgBytes(h.h, strTransferEncoding, strIdentity)
 		h.connectionClose = true
@@ -1900,7 +1903,7 @@ func AppendNormalizedHeaderKey(dst []byte, key string) []byte {
 	normalizeHeaderKey(dst[len(dst)-len(key):], false)
 	return dst
 }
-func AppendNormalizedHeaderKeyBytes(dst , key []byte) []byte {
+func AppendNormalizedHeaderKeyBytes(dst, key []byte) []byte {
 	return AppendNormalizedHeaderKey(dst, b2s(key))
 }
 

@@ -87,7 +87,7 @@ func ListenAndServeTLSEmbed(addr string, certData, keyData []byte, handler Reque
 
 // 请求处理接口
 // RequestHandler必须能处理请求
-// 当返回后，要使用ctx内成员，须在返回前，调用ctx.TimeoutError()
+// 当返回后，有引用ctx内成员，须在返回前，调用ctx.TimeoutError()
 // 当有响应时间限制，可将其封装在TimeoutHandler
 type RequestHandler func(ctx *RequestCtx)
 

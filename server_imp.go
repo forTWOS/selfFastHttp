@@ -399,7 +399,7 @@ func (s *Server) serveConn(c net.Conn) error {
 		ctx.time = currentTime
 		s.Handler(ctx) // 调用用户设置的处理请求接口
 
-		// 超时处理
+		// 超时处理 - 若有超时响应，直接使用超时响应
 		timeoutResponse = ctx.timeoutResponse
 		if timeoutResponse != nil {
 			ctx = s.acquireCtx(c) // todo?? leak ctx => gc
